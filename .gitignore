@@ -39,6 +39,13 @@ samples/
 # ── Runtime metadata sidecars ─────────────────────────────────────────────────
 **/metadata/
 
+# ── Fonts ─────────────────────────────────────────────────────────────────────
+# Provide your own Korean TTF/OTF in fonts/ — do not commit font files
+fonts/*.ttf
+fonts/*.otf
+fonts/*.woff
+fonts/*.woff2
+
 # ── Vendor — must be cloned separately (GPL-3.0 upstream) ────────────────────
 vendor/comic_text_detector/
 

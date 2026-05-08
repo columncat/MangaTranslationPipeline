@@ -121,7 +121,12 @@ export ANTHROPIC_API_KEY=sk-ant-...    # macOS / Linux
 
 또는 앱 실행 후 사이드패널 **Settings → API Key** 에서 입력하면 OS 키링에 안전하게 저장됩니다.
 
-### 4. 모델 가중치
+### 4. 한글 폰트
+
+한글 TTF/OTF 폰트를 `fonts/` 폴더에 직접 넣어 주세요. 앱 실행 시 해당 폴더를 스캔해 사이드패널 폰트 목록에 표시합니다.  
+폰트를 지정하지 않으면 시스템에 설치된 한글 폰트를 자동으로 탐색합니다.
+
+### 5. 모델 가중치
 
 첫 실행 시 자동으로 다운로드됩니다 (총 약 800 MB):
 
@@ -180,7 +185,7 @@ MangaTranslationPipeline/
 │       └── inpainter.py     # LaMa 래퍼
 ├── vendor/
 │   └── comic_text_detector/ # git submodule (GPL-3.0)
-├── fonts/                   # 번들 한글 폰트 (NanumGothic 등)
+├── fonts/                   # 여기에 한글 폰트(.ttf/.otf)를 넣어 주세요
 ├── tests/
 └── requirements.txt
 ```
@@ -330,7 +335,12 @@ export ANTHROPIC_API_KEY=sk-ant-...    # macOS / Linux
 
 Or open the app and enter your key under **Settings → API Key** in the side panel — it will be stored securely in your OS keyring.
 
-### 4. Model weights
+### 4. Korean font
+
+Place a Korean TTF/OTF font file in the `fonts/` folder. The app scans that folder on startup and lists available fonts in the side panel.  
+If no font is placed there, it will search for a Korean-capable font installed on your system.
+
+### 5. Model weights
 
 Downloaded automatically on first run (~800 MB total):
 
@@ -385,7 +395,7 @@ MangaTranslationPipeline/
 │       └── inpainter.py     # LaMa wrapper
 ├── vendor/
 │   └── comic_text_detector/ # git submodule (GPL-3.0)
-├── fonts/                   # bundled Korean fonts (NanumGothic etc.)
+├── fonts/                   # place your Korean font (.ttf/.otf) here
 ├── tests/
 └── requirements.txt
 ```
