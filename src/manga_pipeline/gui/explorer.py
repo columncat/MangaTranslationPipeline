@@ -1,0 +1,243 @@
+"""Left-side dock: folder browser + work queue.
+
+The folder browser lists images in a directory; single-click opens an image
+in the main view (any saved metadata in ``<dir>/metadata/`` is restored).
+The queue panel lets the user batch-add files and run any of:
+
+- ``Detect``     — only the Detect phase across the queue
+- ``Translate``  — only the Translate phase (use after Detect + manual bbox tweaks)
+- ``Run All``    — Detect then Translate
+
+Internally everything runs in ``per-step batch`` mode (each step iterates
+over all queued images before advancing) so ML models stay hot.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
+
+IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif"}
+
+QUEUE_MODE_SEQUENTIAL = "sequential"
+QUEUE_MODE_PER_STEP = "per_step"
+
+STATUS_ICONS = {
+    "pending": "⏳",
+    "running": "▶",
+    "done": "✓",
+    "failed": "✗",
+}
+
+
+def _strip_status(text: str) -> str:
+    if text and text[0] in STATUS_ICONS.values():
+        return text[1:].lstrip()
+    return text
+
+
+class ExplorerPanel(QWidget):
+    image_selected = Signal(object)                       # Path
+    queue_process_requested = Signal(list, str)           # (paths, "detect" | "translate" | "all")
+    queue_save_all_requested = Signal(list)               # paths
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._folder: Optional[Path] = None
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(4, 4, 4, 4)
+        outer.setSpacing(4)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        outer.addWidget(splitter, 1)
+
+        # ---- folder browser ----
+        browser = QWidget()
+        bl = QVBoxLayout(browser)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(2)
+
+        h = QHBoxLayout()
+        self.folder_label = QLabel("(no folder)")
+        self.folder_label.setStyleSheet("color: #444; font-style: italic;")
+        h.addWidget(self.folder_label, 1)
+        open_btn = QPushButton("Open…")
+        open_btn.setMaximumWidth(72)
+        open_btn.clicked.connect(self._on_pick_folder)
+        h.addWidget(open_btn)
+        bl.addLayout(h)
+
+        self.file_list = QListWidget()
+        self.file_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self.file_list.itemClicked.connect(self._on_file_clicked)
+        bl.addWidget(self.file_list, 1)
+
+        add_btn = QPushButton("Add selected → Queue")
+        add_btn.clicked.connect(self._on_add_to_queue)
+        bl.addWidget(add_btn)
+
+        splitter.addWidget(browser)
+
+        # ---- queue ----
+        queue_box = QWidget()
+        ql = QVBoxLayout(queue_box)
+        ql.setContentsMargins(0, 0, 0, 0)
+        ql.setSpacing(2)
+
+        ql.addWidget(QLabel("Work queue:"))
+        self.queue_list = QListWidget()
+        self.queue_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self.queue_list.itemClicked.connect(self._on_queue_clicked)
+        ql.addWidget(self.queue_list, 1)
+
+        h2 = QHBoxLayout()
+        rm = QPushButton("Remove selected")
+        rm.clicked.connect(self._on_remove_selected)
+        h2.addWidget(rm, 1)
+        clr = QPushButton("Clear")
+        clr.clicked.connect(self.queue_list.clear)
+        h2.addWidget(clr)
+        ql.addLayout(h2)
+
+        h3 = QHBoxLayout()
+        run_detect_btn = QPushButton("Detect")
+        run_detect_btn.setToolTip("Run only the Detect phase across the queue")
+        run_detect_btn.clicked.connect(lambda: self._on_process_queue("detect"))
+        h3.addWidget(run_detect_btn, 2)
+
+        run_translate_btn = QPushButton("Translate")
+        run_translate_btn.setToolTip(
+            "Run only the Translate phase across the queue.\n"
+            "Use this after Detect Only + manual bbox adjustments."
+        )
+        run_translate_btn.clicked.connect(lambda: self._on_process_queue("translate"))
+        h3.addWidget(run_translate_btn, 2)
+
+        run_all_btn = QPushButton("Run All")
+        run_all_btn.setToolTip("Run Detect + Translate across the queue")
+        run_all_btn.clicked.connect(lambda: self._on_process_queue("all"))
+        h3.addWidget(run_all_btn, 1)
+        ql.addLayout(h3)
+
+        save_all_btn = QPushButton("Save all final images (overwrite)")
+        save_all_btn.setToolTip(
+            "For each queued image with a rendered final, save it to "
+            "<dir>/translated/<name> (overwrites)"
+        )
+        save_all_btn.clicked.connect(self._on_save_all)
+        ql.addWidget(save_all_btn)
+
+        splitter.addWidget(queue_box)
+        splitter.setSizes([400, 320])
+
+    # ---- folder ----
+
+    def _on_pick_folder(self) -> None:
+        start = str(self._folder) if self._folder else ""
+        folder = QFileDialog.getExistingDirectory(self, "Open folder", start)
+        if not folder:
+            return
+        self.set_folder(Path(folder))
+
+    def set_folder(self, folder: Path) -> None:
+        self._folder = folder
+        self.folder_label.setText(folder.name or str(folder))
+        self.folder_label.setToolTip(str(folder))
+        self.folder_label.setStyleSheet("color: #222;")
+        self.file_list.clear()
+        try:
+            entries = sorted(folder.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            return
+        for p in entries:
+            if p.is_file() and p.suffix.lower() in IMG_EXTS:
+                item = QListWidgetItem(p.name)
+                item.setData(Qt.ItemDataRole.UserRole, str(p))
+                item.setToolTip(str(p))
+                self.file_list.addItem(item)
+
+    def _on_file_clicked(self, item: QListWidgetItem) -> None:
+        p = item.data(Qt.ItemDataRole.UserRole)
+        if p:
+            self.image_selected.emit(Path(p))
+
+    # ---- queue ----
+
+    def _on_add_to_queue(self) -> None:
+        existing: set[str] = set()
+        for i in range(self.queue_list.count()):
+            existing.add(self.queue_list.item(i).data(Qt.ItemDataRole.UserRole))
+        for it in self.file_list.selectedItems():
+            p = it.data(Qt.ItemDataRole.UserRole)
+            if p in existing:
+                continue
+            existing.add(p)
+            qi = QListWidgetItem(f"{STATUS_ICONS['pending']} {Path(p).name}")
+            qi.setData(Qt.ItemDataRole.UserRole, p)
+            qi.setToolTip(p)
+            self.queue_list.addItem(qi)
+
+    def _on_queue_clicked(self, item: QListWidgetItem) -> None:
+        p = item.data(Qt.ItemDataRole.UserRole)
+        if p:
+            self.image_selected.emit(Path(p))
+
+    def _on_remove_selected(self) -> None:
+        for it in list(self.queue_list.selectedItems()):
+            self.queue_list.takeItem(self.queue_list.row(it))
+
+    def _on_process_queue(self, phases: str) -> None:
+        """phases is ``"detect"``, ``"translate"``, or ``"all"``."""
+        paths = self._queued_paths()
+        if not paths:
+            return
+        # reset all icons to pending before starting
+        for i in range(self.queue_list.count()):
+            it = self.queue_list.item(i)
+            base = _strip_status(it.text())
+            it.setText(f"{STATUS_ICONS['pending']} {base}")
+        self.queue_process_requested.emit(paths, phases)
+
+    def _on_save_all(self) -> None:
+        paths = self._queued_paths()
+        if not paths:
+            return
+        self.queue_save_all_requested.emit(paths)
+
+    def _queued_paths(self) -> list[Path]:
+        out: list[Path] = []
+        for i in range(self.queue_list.count()):
+            p = self.queue_list.item(i).data(Qt.ItemDataRole.UserRole)
+            if p:
+                out.append(Path(p))
+        return out
+
+    def mark_queue_status(self, source_path: Path, status: str) -> None:
+        emoji = STATUS_ICONS.get(status, "?")
+        target = str(source_path)
+        for i in range(self.queue_list.count()):
+            it = self.queue_list.item(i)
+            if it.data(Qt.ItemDataRole.UserRole) == target:
+                base = _strip_status(it.text())
+                it.setText(f"{emoji} {base}")
+                if status == "running":
+                    self.queue_list.scrollToItem(it)
+                break

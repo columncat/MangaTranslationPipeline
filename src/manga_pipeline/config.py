@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+from pydantic import BaseModel, Field
+
+from .paths import PROJECT_ROOT
+
+CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+
+
+class Step1Params(BaseModel):
+    mask_threshold: float = 0.3
+    mask_dilate_px: int = 3
+    inpaint_dilate_px: int = 7
+
+
+class Step2Params(BaseModel):
+    kernel_w: int = 15
+    kernel_h: int = 15
+    iterations: int = 1
+    min_area: int = 200
+    max_area_ratio: float = 0.5
+
+
+class Step4Params(BaseModel):
+    model: str = "claude-sonnet-4-6"
+    glossary: str = ""
+    style_notes: str = "natural Korean manga dialogue, preserve tone and honorifics"
+    max_tokens: int = 4096
+    skip_translation: bool = False
+
+
+class Step5Params(BaseModel):
+    font_path: str = ""
+    padding: int = 4
+    min_pt: int = 10
+    max_pt: int = 48
+    outside_pt: int = 36
+    line_spacing: float = 1.15
+    stroke_px: int = 2
+    fill_rgb: tuple[int, int, int] = (0, 0, 0)
+    stroke_rgb: tuple[int, int, int] = (255, 255, 255)
+
+
+class AppConfig(BaseModel):
+    step1: Step1Params = Field(default_factory=Step1Params)
+    step2: Step2Params = Field(default_factory=Step2Params)
+    step4: Step4Params = Field(default_factory=Step4Params)
+    step5: Step5Params = Field(default_factory=Step5Params)
+    # Absolute paths to TTF/OTF/TTC files. Managed by the side panel and
+    # offered as choices in the Edit Translation dialog.
+    fonts: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def load(cls, path: Path = CONFIG_PATH) -> "AppConfig":
+        if not path.exists():
+            return cls()
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return cls.model_validate(data)
+
+    def save(self, path: Path = CONFIG_PATH) -> None:
+        path.write_text(
+            yaml.safe_dump(self.model_dump(), allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )

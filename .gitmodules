@@ -1,0 +1,3 @@
+﻿[submodule "vendor/comic_text_detector"]
+	path = vendor/comic_text_detector
+	url = https://github.com/dmMaze/comic-text-detector.git
