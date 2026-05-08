@@ -83,43 +83,25 @@
 
 - Python **3.10 – 3.12** (3.11 권장)
 - CUDA 지원 GPU (선택 사항 — CPU 동작 가능, 단 Step 1·5 속도 저하)
-- Anthropic API 키 ([api.anthropic.com](https://console.anthropic.com))
+- Anthropic API 키 ([console.anthropic.com](https://console.anthropic.com))
 
-### 1. 저장소 클론 (서브모듈 포함)
+### 1. 저장소 클론
 
 ```bash
 git clone --recurse-submodules https://github.com/columncat/MangaTranslationPipeline.git
 cd MangaTranslationPipeline
 ```
 
-이미 클론했다면 서브모듈만 따로 초기화:
+### 2. 의존성 설치
 
 ```bash
-git submodule update --init --recursive
-```
-
-### 2. 가상환경 + 의존성 설치
-
-```bash
-python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-
 pip install -r requirements.txt
+pip install -r vendor/comic_text_detector/requirements.txt
 ```
 
-### 3. API 키 설정
+### 3. API 키
 
-```bash
-# 환경변수 (임시)
-set ANTHROPIC_API_KEY=sk-ant-...       # Windows
-export ANTHROPIC_API_KEY=sk-ant-...    # macOS / Linux
-```
-
-또는 앱 실행 후 사이드패널 **Settings → API Key** 에서 입력하면 OS 키링에 안전하게 저장됩니다.
+앱 실행 후 사이드패널 **Settings → API Key** 에서 입력하면 OS 키링에 저장됩니다.
 
 ### 4. 한글 폰트
 
@@ -299,41 +281,23 @@ Final translated PNG
 - CUDA-capable GPU (optional — CPU works, but Stage 1 & 5 will be slower)
 - Anthropic API key ([console.anthropic.com](https://console.anthropic.com))
 
-### 1. Clone with submodules
+### 1. Clone
 
 ```bash
 git clone --recurse-submodules https://github.com/columncat/MangaTranslationPipeline.git
 cd MangaTranslationPipeline
 ```
 
-If you already cloned without `--recurse-submodules`:
+### 2. Install dependencies
 
 ```bash
-git submodule update --init --recursive
-```
-
-### 2. Virtual environment & dependencies
-
-```bash
-python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-
 pip install -r requirements.txt
+pip install -r vendor/comic_text_detector/requirements.txt
 ```
 
 ### 3. API key
 
-```bash
-# Temporary (environment variable)
-set ANTHROPIC_API_KEY=sk-ant-...       # Windows
-export ANTHROPIC_API_KEY=sk-ant-...    # macOS / Linux
-```
-
-Or open the app and enter your key under **Settings → API Key** in the side panel — it will be stored securely in your OS keyring.
+Launch the app and enter your key under **Settings → API Key** in the side panel — it will be stored securely in your OS keyring.
 
 ### 4. Korean font
 
