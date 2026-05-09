@@ -10,8 +10,6 @@
 <!-- 시연 영상이 준비되면 아래 주석을 해제하고 YOUR_VIDEO_ID 자리를 채우세요. -->
 <!-- [![Demo](https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://youtu.be/YOUR_VIDEO_ID) -->
 
-> 📽️ **시연 영상 준비 중입니다 / Demo video coming soon.**
->
 > 시연 영상 속 만화 페이지는 *Manga109-s* 데이터셋의 작품을 사용했습니다.  
 > Manga pages shown in the demo are **Courtesy of NAOKO ETO, Manga109-s**.
 
@@ -26,6 +24,7 @@
 - Python **3.10 – 3.12** (3.11.9에서 작동 확인)
 - CUDA 지원 GPU (선택 사항이지만 강력히 권장)
 - Anthropic API 키 ([console.anthropic.com](https://console.anthropic.com))
+- 한글 폰트 파일 (기본 폰트가 포함되어 있으나 사용자 지정 폰트를 사용하고 싶다면 `.ttf` 또는 `.otf` 파일을 `fonts/` 폴더에 넣으세요.)
 
 ### 설치 절차
 
@@ -46,11 +45,6 @@ pip install -r requirements.txt
 pip install -r vendor/comic_text_detector/requirements.txt
 ```
 
-### 폰트 (선택)
-
-`fonts/` 폴더에 Naver Nanum 5종이 기본 포함되어 있어 별도 설치 없이 동작합니다.  
-사용자 지정 폰트를 사용하고 싶다면 `.ttf` 또는 `.otf` 파일을 `fonts/` 폴더에 넣으세요.
-
 ## 실행
 
 다음 중 한 가지 방법을 사용합니다:
@@ -65,10 +59,10 @@ pip install -r vendor/comic_text_detector/requirements.txt
 1. **언어 선택** — 최초 실행 시 한국어/영어 중 인터페이스 언어를 선택합니다 (도구 모음의 **언어…** 로 언제든 변경 가능).
 2. **API 키 입력** — 사이드패널의 **설정 → API 키** 에서 Anthropic API 키를 입력합니다 (OS 키링에 안전 보관).
 3. **폴더 열기** — 왼쪽 탐색 패널에서 만화 이미지 폴더를 선택하거나, 폴더/이미지를 창에 드래그합니다.
-4. **이미지 큐잉** — 처리할 이미지를 작업 대기열에 추가합니다 (Shift / Ctrl+클릭으로 다중 선택 가능).
-5. **검출 실행** — 텍스트 마스크와 박스를 자동 추출합니다.
+4. **작업 대기열 추가** — 처리할 이미지를 작업 대기열에 추가합니다 (Shift / Ctrl+클릭으로 다중 선택 가능).
+5. **검출** — 텍스트 마스크와 박스를 자동 추출합니다.
 6. **박스 편집** *(선택)* — 검출 탭의 **편집** 모드에서 박스를 드래그·리사이즈합니다.
-7. **번역 실행** — OCR → Claude 번역 → 렌더링이 순차 수행됩니다.
+7. **번역** — OCR → Claude 번역 → 렌더링이 순차 수행됩니다.
 8. **번역 수정** *(선택)* — 번역 탭에서 박스를 더블클릭해 한국어 텍스트·정렬·회전·폰트를 편집합니다.
 9. **텍스트 위치 조정** *(선택)* — **텍스트 이동** 모드로 대사 위치를 드래그로 조정합니다 (모드 종료 시 자동 재렌더).
 10. **저장** — 사이드패널 **저장** 버튼으로 결과 PNG와 메타데이터를 `<원본_폴더>/translated/<원본_이름>` 에 저장합니다.
@@ -117,7 +111,7 @@ Source manga image
        │
        ▼
 ┌──────────────┐
-│  4. Translate│  Claude API → Korean translation
+│ 4. Translate │  Claude API → Korean translation
 │              │  (glossary, style notes, prompt caching)
 └──────┬───────┘
        │
