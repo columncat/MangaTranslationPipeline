@@ -173,6 +173,45 @@ class ExplorerPanel(QWidget):
     def _on_file_clicked(self, item: QListWidgetItem) -> None:
         p = item.data(Qt.ItemDataRole.UserRole)
         if p:
+            self.file_list.setCurrentItem(item)
+            self.image_selected.emit(Path(p))
+
+    def _file_paths(self) -> list[Path]:
+        return [
+            Path(self.file_list.item(i).data(Qt.ItemDataRole.UserRole))
+            for i in range(self.file_list.count())
+        ]
+
+    def select_relative(self, delta: int, current: Optional[Path] = None) -> None:
+        """Jump ``delta`` images forward/backward in the folder browser.
+
+        ``current`` is the path currently displayed in the main view; we use
+        it to find our index even when no row is selected. Falls back to the
+        list's current row otherwise. No-op if there are no images.
+        """
+        items_count = self.file_list.count()
+        if items_count == 0:
+            return
+        idx = -1
+        if current is not None:
+            target = str(current)
+            for i in range(items_count):
+                if self.file_list.item(i).data(Qt.ItemDataRole.UserRole) == target:
+                    idx = i
+                    break
+        if idx < 0:
+            idx = self.file_list.currentRow()
+        if idx < 0:
+            idx = 0 if delta > 0 else items_count - 1
+        else:
+            idx = max(0, min(items_count - 1, idx + delta))
+        item = self.file_list.item(idx)
+        if item is None:
+            return
+        self.file_list.setCurrentRow(idx)
+        self.file_list.scrollToItem(item)
+        p = item.data(Qt.ItemDataRole.UserRole)
+        if p:
             self.image_selected.emit(Path(p))
 
     # ---- queue ----

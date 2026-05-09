@@ -52,7 +52,10 @@ class PhaseTabWidget(QWidget):
         self.fit_button.setMaximumWidth(60)
         self._toolbar_layout.addWidget(self.fit_button)
 
-        self.rerun_button = QPushButton(tr("tabs.rerun", phase=phase))
+        # Localised phase label for the re-run button. Falls back to the raw
+        # phase name (e.g. "source") for tabs that don't hide the button.
+        phase_label = tr(f"tabs.phase.{phase}") if phase in ("detect", "translate") else phase
+        self.rerun_button = QPushButton(tr("tabs.rerun", phase=phase_label))
         self._toolbar_layout.addWidget(self.rerun_button)
         self.rerun_button.clicked.connect(lambda: self.rerun_requested.emit(self.phase))
 

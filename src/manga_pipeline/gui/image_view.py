@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QImage, QPixmap, QWheelEvent
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QImage, QKeyEvent, QPixmap, QWheelEvent
 from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView
 
 
@@ -23,8 +23,21 @@ def ndarray_to_qpixmap(arr: np.ndarray) -> QPixmap:
 
 
 class ZoomPanGraphicsView(QGraphicsView):
+    """Zoomable / pannable image view with arrow-key navigation hooks.
+
+    Arrow keys are reserved for navigation (tab switch + image switch) and
+    are forwarded as signals rather than consumed by the default scroll
+    behaviour. The main window decides what they do.
+    """
+
     ZOOM_IN = 1.25
     ZOOM_OUT = 1 / 1.25
+
+    # Direction signals — emitted on Left/Right/Up/Down key press.
+    nav_left = Signal()
+    nav_right = Signal()
+    nav_up = Signal()
+    nav_down = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -39,6 +52,8 @@ class ZoomPanGraphicsView(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setBackgroundBrush(Qt.GlobalColor.darkGray)
+        # The view must accept focus so it sees arrow-key presses.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def set_image(self, arr: Optional[np.ndarray]) -> None:
         self.clear_overlays()
@@ -76,3 +91,27 @@ class ZoomPanGraphicsView(QGraphicsView):
     def wheelEvent(self, event: QWheelEvent) -> None:  # type: ignore[override]
         factor = self.ZOOM_IN if event.angleDelta().y() > 0 else self.ZOOM_OUT
         self.scale(factor, factor)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
+        # Arrow keys are repurposed for navigation. Anything with a modifier
+        # falls through to the base class so e.g. Ctrl+Arrow still works for
+        # finer-grained scroll if the user wants it.
+        if event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            key = event.key()
+            if key == Qt.Key.Key_Left:
+                self.nav_left.emit()
+                event.accept()
+                return
+            if key == Qt.Key.Key_Right:
+                self.nav_right.emit()
+                event.accept()
+                return
+            if key == Qt.Key.Key_Up:
+                self.nav_up.emit()
+                event.accept()
+                return
+            if key == Qt.Key.Key_Down:
+                self.nav_down.emit()
+                event.accept()
+                return
+        super().keyPressEvent(event)

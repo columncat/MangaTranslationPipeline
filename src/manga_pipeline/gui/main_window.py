@@ -50,6 +50,15 @@ class MainWindow(QMainWindow):
         self._source_path: Optional[Path] = None
         self.worker = PipelineWorker()
         self._thread: Optional[QThread] = None
+        # While True, _load_image_path skips its auto-save step. Queue runs
+        # set this so the worker's per-step save_fn writes are not clobbered
+        # by the main window auto-saving stale ``self.ctx`` snapshots when
+        # switching the displayed image as queue progress events arrive.
+        self._queue_active = False
+        # Tracks the user's preferred phase for the upcoming queue items so
+        # ``_on_queue_item_started`` can jump to the right tab even before
+        # the new image has any phase-specific data attached.
+        self._queue_target_tab: Optional[int] = None
 
         self._build_tabs()
         self._build_explorer()
@@ -167,12 +176,22 @@ class MainWindow(QMainWindow):
         self.worker.progress.connect(self._on_step_progress)
         self.worker.finished.connect(self._on_step_finished)
         self.worker.failed.connect(self._on_step_failed)
-        self.worker.page_updated.connect(self._refresh_tabs)
+        self.worker.page_updated.connect(self._on_page_updated)
         self.worker.phase_finished.connect(self._on_phase_finished)
         self.worker.queue_started.connect(self._on_queue_started)
         self.worker.queue_item_started.connect(self._on_queue_item_started)
         self.worker.queue_item_finished.connect(self._on_queue_item_finished)
         self.worker.queue_finished.connect(self._on_queue_finished)
+
+        # Arrow-key navigation is handled at the window level so the same
+        # behaviour applies whether the user has the source / detect /
+        # translate view focused, or even the original-image side view.
+        for tab in (self.source_tab, self.detect_tab, self.translate_tab):
+            for view in (tab.view, tab.original_view):
+                view.nav_left.connect(self._on_nav_prev_tab)
+                view.nav_right.connect(self._on_nav_next_tab)
+                view.nav_up.connect(self._on_nav_prev_image)
+                view.nav_down.connect(self._on_nav_next_image)
 
     # ----------------------------------------------------------------- file IO
 
@@ -188,8 +207,13 @@ class MainWindow(QMainWindow):
         self._load_image_path(path)
 
     def _load_image_path(self, path: Path) -> None:
+        # Auto-save the previously-displayed image. Skip while a queue is
+        # running because the worker's per-step save_fn is the source of
+        # truth there — overwriting with the main window's stale snapshot
+        # would erase translations added inside the queue worker.
         if (
-            self.ctx is not None
+            not self._queue_active
+            and self.ctx is not None
             and self._source_path is not None
             and self._source_path != path
         ):
@@ -382,10 +406,14 @@ class MainWindow(QMainWindow):
 
         if phases_label == "detect":
             phases: tuple[str, ...] = (PHASE_DETECT,)
+            self._queue_target_tab = 1
         elif phases_label == "translate":
             phases = (PHASE_TRANSLATE,)
+            self._queue_target_tab = 2
         else:
             phases = (PHASE_DETECT, PHASE_TRANSLATE)
+            # End of an end-to-end run lands on Translate.
+            self._queue_target_tab = 2
 
         self._launch_thread(
             queue=[Path(p) for p in paths],
@@ -554,12 +582,21 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self._queue_total = total
         self._queue_done = 0
+        self._queue_active = True
         self.status_bar.showMessage(tr("status.queue_progress", total=total))
 
     def _on_queue_item_started(self, path: object, idx: int, total: int) -> None:
         p = Path(str(path))
         self.explorer.mark_queue_status(p, "running")
+        # _queue_active is True, so _load_image_path will skip its
+        # auto-save and only refresh the view + self.ctx pointer.
         self._load_image_path(p)
+        # Jump to the tab that matches what the queue is about to produce
+        # (Detect → tab 1, Translate / Run All → tab 2). Without this the
+        # previous _load_image_path call may leave us on tab 0/1 because
+        # the freshly-loaded ctx has no translations yet.
+        if self._queue_target_tab is not None:
+            self.tabs.setCurrentIndex(self._queue_target_tab)
 
     def _on_queue_item_finished(self, path: object, ok: bool, msg: str) -> None:
         p = Path(str(path))
@@ -582,6 +619,15 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(False)
         total = getattr(self, "_queue_total", 0)
         self.status_bar.showMessage(tr("status.queue_done", total=total), 8000)
+        # The queue worker has been writing the up-to-date state to disk via
+        # save_fn after every step; refresh the currently-displayed image
+        # from disk so self.ctx matches what's on disk before the user
+        # navigates away (which would otherwise clobber it with the stale
+        # snapshot loaded at queue_item_started time).
+        self._queue_active = False
+        self._queue_target_tab = None
+        if self._source_path is not None:
+            self._load_image_path(self._source_path)
 
     # ----------------------------------------------------------------- editing
 
@@ -699,10 +745,43 @@ class MainWindow(QMainWindow):
 
     # ----------------------------------------------------------------- refresh
 
+    def _on_page_updated(self, ctx: PageContext) -> None:
+        """Worker emits this after every step. While a queue is running we
+        keep ``self.ctx`` pointed at the worker's mutated context so it
+        doesn't get overwritten by a stale snapshot when the user later
+        navigates away."""
+        if self._queue_active:
+            self.ctx = ctx
+        self._refresh_tabs(ctx)
+
     def _refresh_tabs(self, ctx: PageContext) -> None:
         self.source_tab.update_from_context(ctx)
         self.detect_tab.update_from_context(ctx)
         self.translate_tab.update_from_context(ctx)
+
+    # ----------------------------------------------------------------- nav
+
+    def _on_nav_prev_tab(self) -> None:
+        idx = self.tabs.currentIndex()
+        if idx > 0:
+            self.tabs.setCurrentIndex(idx - 1)
+
+    def _on_nav_next_tab(self) -> None:
+        idx = self.tabs.currentIndex()
+        if idx < self.tabs.count() - 1:
+            self.tabs.setCurrentIndex(idx + 1)
+
+    def _on_nav_prev_image(self) -> None:
+        # Disable navigation while the queue worker is writing — switching
+        # images mid-run would race with save_fn.
+        if self._queue_active:
+            return
+        self.explorer.select_relative(-1, current=self._source_path)
+
+    def _on_nav_next_image(self) -> None:
+        if self._queue_active:
+            return
+        self.explorer.select_relative(+1, current=self._source_path)
 
     def _save_config(self) -> None:
         try:
