@@ -64,3 +64,39 @@ def download_file(
 
 def ensure_ctd_weights(progress: Optional[ProgressFn] = None) -> Path:
     return download_file(CTD_URL, CTD_WEIGHTS, expected_sha256=CTD_SHA256, progress=progress)
+
+
+def ctd_weights_present() -> bool:
+    return CTD_WEIGHTS.exists() and CTD_WEIGHTS.stat().st_size > 0
+
+
+def ensure_lama_weights(progress: Optional[ProgressFn] = None) -> None:
+    """Trigger LaMa weight download by instantiating the model.
+
+    ``simple_lama_inpainting.SimpleLama`` downloads its weights on first
+    construction; there is no public progress hook, so we just call it and
+    rely on a coarse "in progress" indicator at the UI level.
+    """
+    from simple_lama_inpainting import SimpleLama  # lazy import
+
+    if progress:
+        progress(0, 0)
+    _ = SimpleLama(device="cpu")
+    if progress:
+        progress(1, 1)
+
+
+def ensure_manga_ocr_weights(progress: Optional[ProgressFn] = None) -> None:
+    """Trigger manga-ocr (HuggingFace) weight download.
+
+    HuggingFace handles caching itself; constructing :class:`MangaOcr` is
+    enough to fetch the weights into the local cache. No fine-grained
+    progress is available without monkey-patching ``hf_hub_download``.
+    """
+    from manga_ocr import MangaOcr  # lazy import
+
+    if progress:
+        progress(0, 0)
+    _ = MangaOcr()
+    if progress:
+        progress(1, 1)

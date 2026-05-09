@@ -11,22 +11,20 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ..i18n import tr
 from ..utils.secrets import delete_anthropic_key, get_anthropic_key, set_anthropic_key
 
 
 class ApiKeyDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Anthropic API key")
+        self.setWindowTitle(tr("apikey.title"))
         self.setMinimumWidth(420)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(
-            QLabel(
-                "Enter your Anthropic API key. It is stored in the OS keyring "
-                "(or environment variable as fallback)."
-            )
-        )
+        body = QLabel(tr("apikey.body"))
+        body.setWordWrap(True)
+        layout.addWidget(body)
 
         row = QHBoxLayout()
         self.edit = QLineEdit(get_anthropic_key() or "")
@@ -44,7 +42,7 @@ class ApiKeyDialog(QDialog):
         row.addWidget(toggle)
         layout.addLayout(row)
 
-        clear_btn = QPushButton("Remove stored key")
+        clear_btn = QPushButton(tr("apikey.remove"))
         clear_btn.clicked.connect(self._clear)
         layout.addWidget(clear_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 

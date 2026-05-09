@@ -16,23 +16,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..i18n import tr
 from ..models import PageContext
 from .image_view import ZoomPanGraphicsView
 from .items import ClickableRectItem, DraggableTextItem, EditableBBoxItem
 
 
 class PhaseTabWidget(QWidget):
-    """Base for the Detect / Translate phase tabs.
-
-    Contains a horizontal splitter with two graphics views:
-      - ``original_view`` (left, hidden by default) — always shows ``ctx.source``
-      - ``view``          (right, always visible)  — phase-specific image
-
-    A ``View Original`` checkbox in the toolbar toggles the left view.
-    ``rerun_requested`` is emitted with the phase name when the user clicks
-    the local re-run button.
-    """
-
     rerun_requested = Signal(str)
 
     def __init__(self, phase: str, title: str, parent=None):
@@ -49,22 +39,20 @@ class PhaseTabWidget(QWidget):
         self._toolbar_layout.addWidget(self.title_label)
         self._toolbar_layout.addStretch(1)
 
-        self.status_label = QLabel("not run")
+        self.status_label = QLabel(tr("tabs.status_not_run"))
         self.status_label.setStyleSheet("color: gray;")
         self._toolbar_layout.addWidget(self.status_label)
 
-        self.view_original_box = QCheckBox("View Original")
-        self.view_original_box.setToolTip(
-            "Split this tab and show the original source image on the left half"
-        )
+        self.view_original_box = QCheckBox(tr("tabs.view_original"))
+        self.view_original_box.setToolTip(tr("tabs.view_original_tip"))
         self.view_original_box.toggled.connect(self._on_toggle_view_original)
         self._toolbar_layout.addWidget(self.view_original_box)
 
-        self.fit_button = QPushButton("Fit")
+        self.fit_button = QPushButton(tr("tabs.fit"))
         self.fit_button.setMaximumWidth(60)
         self._toolbar_layout.addWidget(self.fit_button)
 
-        self.rerun_button = QPushButton(f"Re-run {phase}")
+        self.rerun_button = QPushButton(tr("tabs.rerun", phase=phase))
         self._toolbar_layout.addWidget(self.rerun_button)
         self.rerun_button.clicked.connect(lambda: self.rerun_requested.emit(self.phase))
 
@@ -82,14 +70,11 @@ class PhaseTabWidget(QWidget):
 
         self.fit_button.clicked.connect(self._fit_visible_views)
 
-        self._latest_source = None  # cached for the original_view
-
-    # ---- view management ----
+        self._latest_source = None
 
     def _on_toggle_view_original(self, checked: bool) -> None:
         self.original_view.setVisible(checked)
         if checked:
-            # Give the left half a sensible width and update its image.
             total = max(1, self._splitter.size().width() or self.width())
             self._splitter.setSizes([total // 2, total - total // 2])
             if self._latest_source is not None:
@@ -99,7 +84,6 @@ class PhaseTabWidget(QWidget):
         QTimer.singleShot(0, self._fit_visible_views)
 
     def _set_original_image(self, source) -> None:
-        """Subclasses call this whenever the source image changes."""
         self._latest_source = source
         if self.view_original_box.isChecked():
             self.original_view.set_image(source)
@@ -109,12 +93,8 @@ class PhaseTabWidget(QWidget):
             self.original_view.fit_to_view()
         self.view.fit_to_view()
 
-    # ---- show / status ----
-
     def showEvent(self, event):  # type: ignore[override]
         super().showEvent(event)
-        # Re-fit every time the user switches to this tab, so the image
-        # always lands centered and at the largest size that fits.
         QTimer.singleShot(0, self._fit_visible_views)
 
     def set_status(self, text: str, ok: bool = True) -> None:
@@ -128,9 +108,9 @@ class PhaseTabWidget(QWidget):
 
 class SourceTab(PhaseTabWidget):
     def __init__(self, parent=None):
-        super().__init__(phase="source", title="0. Original", parent=parent)
+        super().__init__(phase="source", title=tr("tabs.title.original"), parent=parent)
         self.rerun_button.hide()
-        self.view_original_box.hide()  # already showing the original
+        self.view_original_box.hide()
 
     def update_from_context(self, ctx: PageContext) -> None:
         self.view.set_image(ctx.source)
@@ -138,32 +118,25 @@ class SourceTab(PhaseTabWidget):
 
 
 class DetectTab(PhaseTabWidget):
-    """Detect phase view.
-
-    - Right-click a box to delete it (always available).
-    - Toggle ``Edit`` to drag boxes around and resize via corner handles.
-    - ``Add Box`` inserts a default-sized rectangle at the image center.
-    """
-
     bbox_delete_requested = Signal(int)
-    bbox_geometry_changed = Signal(int, int, int, int, int)  # idx, x, y, w, h
+    bbox_geometry_changed = Signal(int, int, int, int, int)
     bbox_add_requested = Signal()
 
     def __init__(self, parent=None):
-        super().__init__(phase="detect", title="1. Detect", parent=parent)
-        hint = QLabel("Right-click: delete  |  Edit: drag to move/resize")
+        super().__init__(phase="detect", title=tr("tabs.title.detect"), parent=parent)
+        hint = QLabel(tr("tabs.detect.hint"))
         hint.setStyleSheet("color: #666; font-size: 11px;")
         self._toolbar_layout.insertWidget(1, hint)
 
-        self.add_button = QPushButton("Add Box")
-        self.add_button.setToolTip("Insert a default-sized box at the image center")
+        self.add_button = QPushButton(tr("tabs.detect.add"))
+        self.add_button.setToolTip(tr("tabs.detect.add_tip"))
         self.add_button.clicked.connect(self.bbox_add_requested.emit)
         self._toolbar_layout.insertWidget(2, self.add_button)
 
         self._edit_enabled = False
-        self.edit_button = QPushButton("Edit")
+        self.edit_button = QPushButton(tr("tabs.detect.edit"))
         self.edit_button.setCheckable(True)
-        self.edit_button.setToolTip("Toggle drag-to-move / corner-resize for boxes")
+        self.edit_button.setToolTip(tr("tabs.detect.edit_tip"))
         self.edit_button.toggled.connect(self._on_toggle_edit)
         self._toolbar_layout.insertWidget(3, self.edit_button)
 
@@ -171,7 +144,6 @@ class DetectTab(PhaseTabWidget):
 
     def _on_toggle_edit(self, checked: bool) -> None:
         self._edit_enabled = checked
-        # In edit mode left-button drag must move/resize boxes, so disable pan.
         self.view.setDragMode(
             QGraphicsView.DragMode.NoDrag
             if checked
@@ -202,50 +174,37 @@ class DetectTab(PhaseTabWidget):
 
 
 class TranslateTab(PhaseTabWidget):
-    """Combined OCR + Translation + Final view.
-
-    Edit modes:
-      - ``Move Text`` shows draggable text overlays on top of the cleaned image.
-        Releasing a drag emits ``text_offset_changed(idx, dx, dy)`` so the
-        renderer can pick up the new offset on the next Render.
-    """
-
     bbox_delete_requested = Signal(int)
     translation_edit_requested = Signal(int)
-    text_offset_changed = Signal(int, int, int)  # idx, offset_x, offset_y
+    text_offset_changed = Signal(int, int, int)
 
     def __init__(self, parent=None):
-        super().__init__(phase="translate", title="2. Translate", parent=parent)
-        hint = QLabel("Right-click: delete  |  Double-click: edit text")
+        super().__init__(phase="translate", title=tr("tabs.title.translate"), parent=parent)
+        hint = QLabel(tr("tabs.translate.hint"))
         hint.setStyleSheet("color: #666; font-size: 11px;")
         self._toolbar_layout.insertWidget(1, hint)
 
         self._show_korean = True
-        self.toggle_button = QPushButton("Show JA")
+        self.toggle_button = QPushButton(tr("tabs.translate.show_ja"))
         self.toggle_button.setCheckable(True)
-        self.toggle_button.setToolTip("Toggle overlay text language")
+        self.toggle_button.setToolTip(tr("tabs.translate.lang_tip"))
         self._toolbar_layout.insertWidget(2, self.toggle_button)
         self.toggle_button.toggled.connect(self._on_toggle_lang)
 
         self._show_cleaned_only = False
-        self.hide_text_button = QPushButton("Hide text")
+        self.hide_text_button = QPushButton(tr("tabs.translate.hide_text"))
         self.hide_text_button.setCheckable(True)
-        self.hide_text_button.setToolTip("Show cleaned image without rendered translations")
+        self.hide_text_button.setToolTip(tr("tabs.translate.hide_tip"))
         self._toolbar_layout.insertWidget(3, self.hide_text_button)
         self.hide_text_button.toggled.connect(self._on_toggle_hide_text)
 
         self._move_text = False
-        self.move_text_button = QPushButton("Move Text")
+        self.move_text_button = QPushButton(tr("tabs.translate.move_text"))
         self.move_text_button.setCheckable(True)
-        self.move_text_button.setToolTip(
-            "Drag dialogue text to reposition without moving its bbox.\n"
-            "Press Render after moving to update the final image."
-        )
+        self.move_text_button.setToolTip(tr("tabs.translate.move_tip"))
         self.move_text_button.toggled.connect(self._on_toggle_move_text)
         self._toolbar_layout.insertWidget(4, self.move_text_button)
 
-        # Renderer defaults — set by main_window so Move-Text previews match
-        # the actual font face and size used at render time.
         self._default_font_path: Optional[str] = None
         self._default_font_pt: int = 36
 
@@ -253,7 +212,9 @@ class TranslateTab(PhaseTabWidget):
 
     def _on_toggle_lang(self, checked: bool) -> None:
         self._show_korean = not checked
-        self.toggle_button.setText("Show KO" if checked else "Show JA")
+        self.toggle_button.setText(
+            tr("tabs.translate.show_ko") if checked else tr("tabs.translate.show_ja")
+        )
         if self._ctx:
             self.update_from_context(self._ctx)
 
@@ -264,7 +225,6 @@ class TranslateTab(PhaseTabWidget):
 
     def _on_toggle_move_text(self, checked: bool) -> None:
         self._move_text = checked
-        # Pan must yield to draggable text items in move-text mode.
         self.view.setDragMode(
             QGraphicsView.DragMode.NoDrag
             if checked
@@ -274,8 +234,6 @@ class TranslateTab(PhaseTabWidget):
             self.update_from_context(self._ctx)
 
     def set_render_defaults(self, font_path: Optional[str], default_pt: int) -> None:
-        """Tell the tab which font/size the renderer would use by default,
-        so Move-Text previews match the actual rendered text."""
         self._default_font_path = font_path or None
         self._default_font_pt = max(6, int(default_pt))
         if self._move_text and self._ctx is not None:
@@ -284,8 +242,6 @@ class TranslateTab(PhaseTabWidget):
     def update_from_context(self, ctx: PageContext) -> None:
         self._ctx = ctx
 
-        # Move-Text mode hides the rendered text so the user can place
-        # draggable previews on the clean background.
         show_clean = self._show_cleaned_only or self._move_text
         if show_clean and ctx.cleaned is not None:
             base = ctx.cleaned
@@ -341,9 +297,9 @@ class TranslateTab(PhaseTabWidget):
     def _draw_translation_overlays(self, ctx: PageContext) -> None:
         pen = QPen(QColor(80, 200, 80))
         pen.setWidth(2)
-        for i, tr in enumerate(ctx.translations):
+        for i, tr_item in enumerate(ctx.translations):
             rect = ClickableRectItem(
-                QRectF(tr.bbox.x, tr.bbox.y, tr.bbox.w, tr.bbox.h),
+                QRectF(tr_item.bbox.x, tr_item.bbox.y, tr_item.bbox.w, tr_item.bbox.h),
                 idx=i,
                 on_right_click=self.bbox_delete_requested.emit,
                 on_double_click=self.translation_edit_requested.emit,
@@ -353,12 +309,12 @@ class TranslateTab(PhaseTabWidget):
             self.view.add_overlay_item(rect)
 
             if self._move_text:
-                self._add_draggable_text(i, tr)
+                self._add_draggable_text(i, tr_item)
             else:
-                text = tr.text_ko if self._show_korean else tr.text_ja
-                if tr.ignore_boundary:
-                    text = "↔ " + text
-                self._add_label(tr.bbox, text.replace("\n", " ⏎ "))
+                text = tr_item.text_ko if self._show_korean else tr_item.text_ja
+                # Translations are always center-on-bbox, so prefix all of them.
+                text = "↔ " + text
+                self._add_label(tr_item.bbox, text.replace("\n", " ⏎ "))
 
     def _add_label(self, bbox, text: str) -> None:
         label = QGraphicsSimpleTextItem(text)
@@ -369,24 +325,27 @@ class TranslateTab(PhaseTabWidget):
         label.setPos(bbox.x, max(0, bbox.y - 14))
         self.view.add_overlay_item(label)
 
-    def _add_draggable_text(self, idx: int, tr) -> None:
-        bbox_center = QPointF(tr.bbox.x + tr.bbox.w / 2.0, tr.bbox.y + tr.bbox.h / 2.0)
-        offset = QPointF(int(tr.text_offset_x or 0), int(tr.text_offset_y or 0))
+    def _add_draggable_text(self, idx: int, tr_item) -> None:
+        bbox_center = QPointF(
+            tr_item.bbox.x + tr_item.bbox.w / 2.0,
+            tr_item.bbox.y + tr_item.bbox.h / 2.0,
+        )
+        offset = QPointF(int(tr_item.text_offset_x or 0), int(tr_item.text_offset_y or 0))
         font_size = (
-            int(tr.font_pt)
-            if (tr.font_pt and tr.font_pt > 0)
+            int(tr_item.font_pt)
+            if (tr_item.font_pt and tr_item.font_pt > 0)
             else int(self._default_font_pt)
         )
-        font_path = tr.font_path or self._default_font_path
+        font_path = tr_item.font_path or self._default_font_path
         item = DraggableTextItem(
             idx=idx,
             bbox_center=bbox_center,
             offset=offset,
-            text=tr.text_ko or tr.text_ja or "(empty)",
+            text=tr_item.text_ko or tr_item.text_ja or "(empty)",
             on_offset_changed=self.text_offset_changed.emit,
             font_size=max(6, font_size),
             font_path=font_path,
-            rotation=int(getattr(tr, "text_rotation", 0) or 0),
+            rotation=int(getattr(tr_item, "text_rotation", 0) or 0),
         )
         self.view.add_overlay_item(item)
 

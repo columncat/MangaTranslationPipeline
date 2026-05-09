@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -33,10 +34,15 @@ class Step4Params(BaseModel):
 
 
 class Step5Params(BaseModel):
+    """Render parameters.
+
+    Translations are always rendered with ``ignore_boundary`` semantics
+    (centered on the bbox, only user newlines split lines), so the
+    in-bbox auto-fit fields (``min_pt``, ``max_pt``, ``padding``) have
+    been removed. ``outside_pt`` is the single default font size.
+    """
+
     font_path: str = ""
-    padding: int = 4
-    min_pt: int = 10
-    max_pt: int = 40
     outside_pt: int = 25
     line_spacing: float = 1.10
     stroke_px: int = 2
@@ -49,15 +55,26 @@ class AppConfig(BaseModel):
     step2: Step2Params = Field(default_factory=Step2Params)
     step4: Step4Params = Field(default_factory=Step4Params)
     step5: Step5Params = Field(default_factory=Step5Params)
-    # Absolute paths to TTF/OTF/TTC files. Managed by the side panel and
-    # offered as choices in the Edit Translation dialog.
-    fonts: list[str] = Field(default_factory=list)
+    # External fonts (outside fonts/ folder) added by the user. Files inside
+    # fonts/ are auto-discovered each launch so they don't need to be tracked
+    # here. Absolute paths only.
+    external_fonts: list[str] = Field(default_factory=list)
+    # ``None`` means "ask on next launch" — the language chooser dialog
+    # only appears while this field is unset.
+    ui_language: Optional[str] = None
+    # Toggled to True after the first-run download dialog has finished
+    # successfully. Suppresses re-showing the popup on subsequent launches
+    # (weights still re-download themselves silently if missing).
+    first_run_done: bool = False
 
     @classmethod
     def load(cls, path: Path = CONFIG_PATH) -> "AppConfig":
         if not path.exists():
             return cls()
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        # ``fonts`` was renamed to ``external_fonts`` — preserve old configs.
+        if "fonts" in data and "external_fonts" not in data:
+            data["external_fonts"] = data.pop("fonts")
         return cls.model_validate(data)
 
     def save(self, path: Path = CONFIG_PATH) -> None:

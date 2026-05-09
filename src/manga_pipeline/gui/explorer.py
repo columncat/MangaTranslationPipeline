@@ -30,6 +30,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..i18n import tr
+
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif"}
 
 QUEUE_MODE_SEQUENTIAL = "sequential"
@@ -72,10 +74,10 @@ class ExplorerPanel(QWidget):
         bl.setSpacing(2)
 
         h = QHBoxLayout()
-        self.folder_label = QLabel("(no folder)")
+        self.folder_label = QLabel(tr("explorer.no_folder"))
         self.folder_label.setStyleSheet("color: #444; font-style: italic;")
         h.addWidget(self.folder_label, 1)
-        open_btn = QPushButton("Open…")
+        open_btn = QPushButton(tr("explorer.open_folder"))
         open_btn.setMaximumWidth(72)
         open_btn.clicked.connect(self._on_pick_folder)
         h.addWidget(open_btn)
@@ -88,7 +90,7 @@ class ExplorerPanel(QWidget):
         self.file_list.itemClicked.connect(self._on_file_clicked)
         bl.addWidget(self.file_list, 1)
 
-        add_btn = QPushButton("Add selected → Queue")
+        add_btn = QPushButton(tr("explorer.add_to_queue"))
         add_btn.clicked.connect(self._on_add_to_queue)
         bl.addWidget(add_btn)
 
@@ -100,7 +102,7 @@ class ExplorerPanel(QWidget):
         ql.setContentsMargins(0, 0, 0, 0)
         ql.setSpacing(2)
 
-        ql.addWidget(QLabel("Work queue:"))
+        ql.addWidget(QLabel(tr("explorer.queue_label")))
         self.queue_list = QListWidget()
         self.queue_list.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
@@ -109,39 +111,33 @@ class ExplorerPanel(QWidget):
         ql.addWidget(self.queue_list, 1)
 
         h2 = QHBoxLayout()
-        rm = QPushButton("Remove selected")
+        rm = QPushButton(tr("explorer.remove_selected"))
         rm.clicked.connect(self._on_remove_selected)
         h2.addWidget(rm, 1)
-        clr = QPushButton("Clear")
+        clr = QPushButton(tr("explorer.clear"))
         clr.clicked.connect(self.queue_list.clear)
         h2.addWidget(clr)
         ql.addLayout(h2)
 
         h3 = QHBoxLayout()
-        run_detect_btn = QPushButton("Detect")
-        run_detect_btn.setToolTip("Run only the Detect phase across the queue")
+        run_detect_btn = QPushButton(tr("explorer.detect"))
+        run_detect_btn.setToolTip(tr("explorer.detect_tip"))
         run_detect_btn.clicked.connect(lambda: self._on_process_queue("detect"))
         h3.addWidget(run_detect_btn, 2)
 
-        run_translate_btn = QPushButton("Translate")
-        run_translate_btn.setToolTip(
-            "Run only the Translate phase across the queue.\n"
-            "Use this after Detect Only + manual bbox adjustments."
-        )
+        run_translate_btn = QPushButton(tr("explorer.translate"))
+        run_translate_btn.setToolTip(tr("explorer.translate_tip"))
         run_translate_btn.clicked.connect(lambda: self._on_process_queue("translate"))
         h3.addWidget(run_translate_btn, 2)
 
-        run_all_btn = QPushButton("Run All")
-        run_all_btn.setToolTip("Run Detect + Translate across the queue")
+        run_all_btn = QPushButton(tr("explorer.run_all"))
+        run_all_btn.setToolTip(tr("explorer.run_all_tip"))
         run_all_btn.clicked.connect(lambda: self._on_process_queue("all"))
         h3.addWidget(run_all_btn, 1)
         ql.addLayout(h3)
 
-        save_all_btn = QPushButton("Save all final images (overwrite)")
-        save_all_btn.setToolTip(
-            "For each queued image with a rendered final, save it to "
-            "<dir>/translated/<name> (overwrites)"
-        )
+        save_all_btn = QPushButton(tr("explorer.save_all"))
+        save_all_btn.setToolTip(tr("explorer.save_all_tip"))
         save_all_btn.clicked.connect(self._on_save_all)
         ql.addWidget(save_all_btn)
 

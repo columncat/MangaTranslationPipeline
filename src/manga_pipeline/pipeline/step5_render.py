@@ -53,30 +53,6 @@ def _measure(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont)
     return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 
-def _wrap_to_width(
-    draw: ImageDraw.ImageDraw,
-    text: str,
-    font: ImageFont.FreeTypeFont,
-    max_width: int,
-) -> list[str]:
-    if not text:
-        return [""]
-
-    lines: list[str] = []
-    current = ""
-    for ch in text:
-        candidate = current + ch
-        w, _ = _measure(draw, candidate, font)
-        if w <= max_width or current == "":
-            current = candidate
-        else:
-            lines.append(current)
-            current = ch
-    if current:
-        lines.append(current)
-    return lines
-
-
 def _block_size(
     draw: ImageDraw.ImageDraw,
     lines: list[str],
@@ -138,40 +114,6 @@ def _render_text_block_to_buffer(
     return buf
 
 
-def fit_font_size(
-    draw: ImageDraw.ImageDraw,
-    text: str,
-    font_path: Path,
-    box_w: int,
-    box_h: int,
-    *,
-    min_pt: int,
-    max_pt: int,
-    line_spacing: float,
-    padding: int,
-) -> tuple[int, list[str]]:
-    inner_w = max(1, box_w - 2 * padding)
-    inner_h = max(1, box_h - 2 * padding)
-
-    lo, hi = min_pt, max_pt
-    best_pt = min_pt
-    best_lines = [text]
-
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        font = load_font(font_path, mid)
-        lines = _wrap_to_width(draw, text, font, inner_w)
-        w, h = _block_size(draw, lines, font, line_spacing)
-        if w <= inner_w and h <= inner_h:
-            best_pt = mid
-            best_lines = lines
-            lo = mid + 1
-        else:
-            hi = mid - 1
-
-    return best_pt, best_lines
-
-
 class KoreanRenderer:
     def __init__(self, font_path: Optional[Path] = None):
         if font_path is None or not Path(font_path).exists():
@@ -188,11 +130,13 @@ class KoreanRenderer:
         items: list[TranslationResult],
         params: Step5Params,
     ) -> np.ndarray:
+        """Render every translation centered on its bbox.
+
+        Translations are always treated as ``ignore_boundary``: lines split
+        only on user-inserted ``\\n`` and the block is centered on the bbox.
+        """
         h, w = cleaned_rgb.shape[:2]
         layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        # A small measuring draw — used for ``fit_font_size``. The actual
-        # painting happens on per-block buffers so we can rotate them.
-        measure_draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
 
         for item in items:
             if not item.text_ko:
@@ -203,42 +147,21 @@ class KoreanRenderer:
             align = (getattr(item, "text_align", "center") or "center").lower()
             rotation = int(getattr(item, "text_rotation", 0) or 0)
 
-            if item.ignore_boundary:
-                pt = (
-                    int(item.font_pt)
-                    if (item.font_pt and item.font_pt > 0)
-                    else int(params.outside_pt)
-                )
-                font = load_font(font_path, max(6, pt))
-                lines = item.text_ko.split("\n")
-                cx = item.bbox.x + item.bbox.w // 2 + ox
-                cy = item.bbox.y + item.bbox.h // 2 + oy
-            else:
-                if item.font_pt and item.font_pt > 0:
-                    pt = int(item.font_pt)
-                    lines = item.text_ko.split("\n")
-                else:
-                    pt, lines = fit_font_size(
-                        measure_draw,
-                        item.text_ko,
-                        font_path,
-                        item.bbox.w,
-                        item.bbox.h,
-                        min_pt=params.min_pt,
-                        max_pt=params.max_pt,
-                        line_spacing=params.line_spacing,
-                        padding=params.padding,
-                    )
-                font = load_font(font_path, pt)
-                cx = item.bbox.x + item.bbox.w // 2 + ox
-                cy = item.bbox.y + item.bbox.h // 2 + oy
+            pt = (
+                int(item.font_pt)
+                if (item.font_pt and item.font_pt > 0)
+                else int(params.outside_pt)
+            )
+            font = load_font(font_path, max(6, pt))
+            lines = item.text_ko.split("\n")
+            cx = item.bbox.x + item.bbox.w // 2 + ox
+            cy = item.bbox.y + item.bbox.h // 2 + oy
 
             buf = _render_text_block_to_buffer(lines, font, params, align)
             if rotation:
                 buf = buf.rotate(
                     rotation, expand=True, resample=Image.BICUBIC
                 )
-            # Paste the buffer so its center lands on (cx, cy).
             paste_x = int(cx - buf.width / 2)
             paste_y = int(cy - buf.height / 2)
             layer.alpha_composite(buf, (paste_x, paste_y))

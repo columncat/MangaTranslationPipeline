@@ -7,7 +7,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -21,13 +20,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..i18n import tr
+
 
 class TranslationEditDialog(QDialog):
     """Edit the Korean translation of a single bbox.
 
+    Translations are now always rendered with ``ignore_boundary`` semantics
+    (centered on the bbox, only user-inserted ``\\n`` splits lines), so the
+    Ignore Boundary checkbox has been removed.
+
     Controls:
       - Korean text editor (Ctrl+Enter accepts)
-      - Ignore Boundary checkbox (centered, no auto-wrap)
       - Font dropdown — choices come from the side panel's Fonts library;
         ``(default)`` falls back to the renderer's default font
       - Font size spinbox — initial value is the dialogue's current effective
@@ -40,7 +44,6 @@ class TranslationEditDialog(QDialog):
         self,
         japanese: str,
         korean: str,
-        ignore_boundary: bool = True,
         font_path: Optional[str] = None,
         font_pt: Optional[int] = None,
         text_align: str = "center",
@@ -50,34 +53,28 @@ class TranslationEditDialog(QDialog):
         parent=None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Edit translation")
-        self.setMinimumSize(480, 420)
+        self.setWindowTitle(tr("edit.title"))
+        self.setMinimumSize(480, 380)
 
         layout = QVBoxLayout(self)
 
-        layout.addWidget(QLabel("Japanese (original):"))
+        layout.addWidget(QLabel(tr("edit.ja_label")))
         ja_view = QPlainTextEdit(japanese)
         ja_view.setReadOnly(True)
         ja_view.setMaximumHeight(80)
         ja_view.setStyleSheet("color: #555; background: #f5f5f5;")
         layout.addWidget(ja_view)
 
-        layout.addWidget(QLabel("Korean (Ctrl+Enter to accept):"))
+        layout.addWidget(QLabel(tr("edit.ko_label")))
         self.editor = QPlainTextEdit(korean)
         self.editor.setMinimumHeight(80)
         layout.addWidget(self.editor, 1)
-
-        self.ignore_boundary_box = QCheckBox(
-            "Ignore Boundary  (center on bbox; only your line breaks split lines)"
-        )
-        self.ignore_boundary_box.setChecked(bool(ignore_boundary))
-        layout.addWidget(self.ignore_boundary_box)
 
         # Per-dialogue overrides
         overrides = QFormLayout()
 
         self.font_combo = QComboBox()
-        self.font_combo.addItem("(default)", None)
+        self.font_combo.addItem(tr("edit.font_default"), None)
         seen: set[str] = set()
         for fp in available_fonts or []:
             if fp in seen:
@@ -94,30 +91,25 @@ class TranslationEditDialog(QDialog):
                     break
             else:
                 self.font_combo.addItem(
-                    f"[not in library] {Path(font_path).name}", font_path
+                    tr("edit.font_orphan", name=Path(font_path).name), font_path
                 )
                 selected_idx = self.font_combo.count() - 1
         self.font_combo.setCurrentIndex(selected_idx)
-        self.font_combo.setToolTip(
-            "Manage fonts in the side panel's 'Fonts library' group."
-        )
-        overrides.addRow("Font:", self.font_combo)
+        overrides.addRow(tr("edit.font_label"), self.font_combo)
 
         initial_pt = int(font_pt) if (font_pt and font_pt > 0) else int(default_font_pt)
         self.font_pt_box = QSpinBox()
         self.font_pt_box.setRange(6, 300)
         self.font_pt_box.setValue(max(6, initial_pt))
         self.font_pt_box.setSuffix(" pt")
-        self.font_pt_box.setToolTip(
-            "Defaults to this dialogue's current effective size on open."
-        )
-        overrides.addRow("Font size:", self.font_pt_box)
+        self.font_pt_box.setToolTip(tr("edit.font_size_tip"))
+        overrides.addRow(tr("edit.font_size"), self.font_pt_box)
 
         # Alignment radio buttons
         align_row = QHBoxLayout()
-        self.align_left_btn = QRadioButton("Left")
-        self.align_center_btn = QRadioButton("Center")
-        self.align_right_btn = QRadioButton("Right")
+        self.align_left_btn = QRadioButton(tr("edit.align_left"))
+        self.align_center_btn = QRadioButton(tr("edit.align_center"))
+        self.align_right_btn = QRadioButton(tr("edit.align_right"))
         self._align_group = QButtonGroup(self)
         self._align_group.addButton(self.align_left_btn)
         self._align_group.addButton(self.align_center_btn)
@@ -135,7 +127,7 @@ class TranslationEditDialog(QDialog):
             self.align_right_btn.setChecked(True)
         else:
             self.align_center_btn.setChecked(True)
-        overrides.addRow("Align:", align_wrap)
+        overrides.addRow(tr("edit.align"), align_wrap)
 
         # Rotation
         self.rotation_box = QSpinBox()
@@ -143,10 +135,8 @@ class TranslationEditDialog(QDialog):
         self.rotation_box.setSingleStep(5)
         self.rotation_box.setSuffix("°")
         self.rotation_box.setValue(int(text_rotation) if text_rotation else 0)
-        self.rotation_box.setToolTip(
-            "Counter-clockwise rotation around the bbox center."
-        )
-        overrides.addRow("Rotation:", self.rotation_box)
+        self.rotation_box.setToolTip(tr("edit.rotation_tip"))
+        overrides.addRow(tr("edit.rotation"), self.rotation_box)
 
         layout.addLayout(overrides)
 
@@ -157,7 +147,6 @@ class TranslationEditDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        # Ctrl+Enter (and Ctrl+Return on numpad) → OK from anywhere in the dialog.
         for seq in ("Ctrl+Return", "Ctrl+Enter"):
             sc = QShortcut(QKeySequence(seq), self)
             sc.setContext(Qt.ShortcutContext.WindowShortcut)
@@ -169,10 +158,6 @@ class TranslationEditDialog(QDialog):
     @property
     def korean(self) -> str:
         return self.editor.toPlainText().strip("\n")
-
-    @property
-    def ignore_boundary(self) -> bool:
-        return self.ignore_boundary_box.isChecked()
 
     @property
     def font_path(self) -> Optional[str]:

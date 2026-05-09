@@ -20,12 +20,14 @@ from PySide6.QtWidgets import (
 from .. import persistence
 from ..config import AppConfig
 from ..device import auto_device
+from ..i18n import set_language, tr
 from ..models import BBox, PageContext
 from ..utils.fonts import find_default_font
 from ..utils.image_io import load_rgb, save_image
 from ..utils.secrets import get_anthropic_key
 from .dialogs import TranslationEditDialog
 from .explorer import ExplorerPanel
+from .language_dialog import LanguageDialog
 from .settings_dialog import ApiKeyDialog
 from .side_panel import SidePanel
 from .tabs import DetectTab, SourceTab, TranslateTab
@@ -38,12 +40,12 @@ from .workers import (
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, config: Optional[AppConfig] = None):
         super().__init__()
-        self.setWindowTitle("Manga Translation Pipeline")
+        self.setWindowTitle(tr("app.title"))
         self.resize(1400, 900)
 
-        self.config = AppConfig.load()
+        self.config = config if config is not None else AppConfig.load()
         self.ctx: Optional[PageContext] = None
         self._source_path: Optional[Path] = None
         self.worker = PipelineWorker()
@@ -58,7 +60,9 @@ class MainWindow(QMainWindow):
 
         self.side_panel.set_api_key_status(get_anthropic_key() is not None)
         self._push_render_defaults()
-        self.status_bar.showMessage(f"Device: {auto_device()} — open an image to begin")
+        self.status_bar.showMessage(
+            tr("status.device_ready", device=auto_device())
+        )
 
     # ------------------------------------------------------------------ build
 
@@ -67,9 +71,9 @@ class MainWindow(QMainWindow):
         self.source_tab = SourceTab()
         self.detect_tab = DetectTab()
         self.translate_tab = TranslateTab()
-        self.tabs.addTab(self.source_tab, "0. Original")
-        self.tabs.addTab(self.detect_tab, "1. Detect")
-        self.tabs.addTab(self.translate_tab, "2. Translate")
+        self.tabs.addTab(self.source_tab, tr("tab.original"))
+        self.tabs.addTab(self.detect_tab, tr("tab.detect"))
+        self.tabs.addTab(self.translate_tab, tr("tab.translate"))
         self.setCentralWidget(self.tabs)
 
         self.detect_tab.rerun_requested.connect(self._on_run_phase)
@@ -118,32 +122,36 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         self.addToolBar(tb)
 
-        open_act = QAction("Open…", self)
+        open_act = QAction(tr("toolbar.open"), self)
         open_act.setShortcut(QKeySequence.StandardKey.Open)
         open_act.triggered.connect(self._on_open)
         tb.addAction(open_act)
 
-        save_act = QAction("Save final…", self)
+        save_act = QAction(tr("toolbar.save_final"), self)
         save_act.setShortcut(QKeySequence.StandardKey.Save)
         save_act.triggered.connect(self._on_save)
         tb.addAction(save_act)
 
         tb.addSeparator()
 
-        run_all_act = QAction("Run all", self)
+        run_all_act = QAction(tr("toolbar.run_all"), self)
         run_all_act.setShortcut("Ctrl+R")
         run_all_act.triggered.connect(self._on_run_all)
         tb.addAction(run_all_act)
 
-        cancel_act = QAction("Cancel", self)
+        cancel_act = QAction(tr("toolbar.cancel"), self)
         cancel_act.triggered.connect(lambda: self.worker.cancel())
         tb.addAction(cancel_act)
 
         tb.addSeparator()
 
-        api_act = QAction("API key…", self)
+        api_act = QAction(tr("toolbar.api_key"), self)
         api_act.triggered.connect(self._on_set_api_key)
         tb.addAction(api_act)
+
+        lang_act = QAction(tr("toolbar.language"), self)
+        lang_act.triggered.connect(self._on_change_language)
+        tb.addAction(lang_act)
 
     def _build_status_bar(self) -> None:
         self.status_bar = QStatusBar(self)
@@ -170,7 +178,7 @@ class MainWindow(QMainWindow):
 
     def _on_open(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open manga page", "", "Images (*.png *.jpg *.jpeg *.webp *.bmp)"
+            self, tr("dialog.open_image"), "", "Images (*.png *.jpg *.jpeg *.webp *.bmp)"
         )
         if not path:
             return
@@ -180,8 +188,6 @@ class MainWindow(QMainWindow):
         self._load_image_path(path)
 
     def _load_image_path(self, path: Path) -> None:
-        """Open ``path``, restoring saved metadata; auto-save the previous one."""
-        # 1. Auto-save the currently-open image before switching.
         if (
             self.ctx is not None
             and self._source_path is not None
@@ -192,48 +198,50 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 pass
 
-        # 2. Load the new image (with metadata if present).
         try:
             ctx = persistence.load_context(path)
             if ctx is None:
                 ctx = PageContext(source=load_rgb(path))
         except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(self, "Open failed", str(e))
+            QMessageBox.critical(self, tr("dialog.open_failed"), str(e))
             return
         self.ctx = ctx
         self._source_path = path
         self._refresh_tabs(ctx)
 
-        # 3. Pick the most-advanced tab that has results.
         if ctx.final is not None or ctx.translations:
-            target = 2  # Translate
+            target = 2
         elif ctx.bboxes or ctx.mask is not None:
-            target = 1  # Detect
+            target = 1
         else:
-            target = 0  # Original
+            target = 0
         self.tabs.setCurrentIndex(target)
 
         h, w = ctx.source.shape[:2]
-        restored = ""
-        if ctx.bboxes or ctx.translations or ctx.mask is not None:
-            restored = " [restored from metadata]"
-        self.status_bar.showMessage(f"Loaded: {path.name} ({w}x{h}){restored}")
+        suffix = (
+            tr("status.restored_suffix")
+            if (ctx.bboxes or ctx.translations or ctx.mask is not None)
+            else ""
+        )
+        self.status_bar.showMessage(
+            tr("status.loaded", name=path.name, w=w, h=h, suffix=suffix)
+        )
 
     def _on_save(self) -> None:
-        """Toolbar 'Save final…' — file dialog (any location)."""
         if self.ctx is None or self.ctx.final is None:
-            QMessageBox.information(self, "Nothing to save", "Run Translate first.")
+            QMessageBox.information(
+                self, tr("dialog.nothing_to_save_title"), tr("dialog.nothing_to_save_body")
+            )
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save final image", "translated.png", "PNG (*.png);;JPEG (*.jpg)"
+            self, tr("dialog.save_final"), "translated.png", "PNG (*.png);;JPEG (*.jpg)"
         )
         if not path:
             return
         save_image(self.ctx.final, path)
-        self.status_bar.showMessage(f"Saved: {path}", 5000)
+        self.status_bar.showMessage(tr("status.saved", path=path), 5000)
 
     def _on_save_overwrite(self) -> None:
-        """Side-panel 'Save' — overwrite ``<src_dir>/translated/<src_name>`` silently."""
         target = self._default_save_target()
         if target is None:
             return
@@ -241,12 +249,11 @@ class MainWindow(QMainWindow):
             target.parent.mkdir(parents=True, exist_ok=True)
             save_image(self.ctx.final, target)
         except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(self, "Save failed", str(e))
+            QMessageBox.critical(self, tr("dialog.save_failed"), str(e))
             return
-        self.status_bar.showMessage(f"Saved: {target}", 5000)
+        self.status_bar.showMessage(tr("status.saved", path=target), 5000)
 
     def _on_save_as(self) -> None:
-        """Side-panel 'Save as' — always prompt for a file name."""
         target = self._default_save_target()
         if target is None:
             return
@@ -254,33 +261,38 @@ class MainWindow(QMainWindow):
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            QMessageBox.critical(self, "Cannot create folder", f"{out_dir}\n{e}")
+            QMessageBox.critical(
+                self, tr("dialog.cant_create_folder"), f"{out_dir}\n{e}"
+            )
             return
 
         new_name, ok = QInputDialog.getText(
             self,
-            "Save as",
-            f"Save into:\n{out_dir}\n\nEnter file name (with extension):",
+            tr("dialog.save_as_title"),
+            tr("dialog.save_as_prompt", folder=out_dir),
             text=target.name,
         )
         if not ok or not new_name.strip():
-            self.status_bar.showMessage("Save cancelled", 4000)
+            self.status_bar.showMessage(tr("status.save_cancelled"), 4000)
             return
         new_target = out_dir / new_name.strip()
         try:
             save_image(self.ctx.final, new_target)
         except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(self, "Save failed", str(e))
+            QMessageBox.critical(self, tr("dialog.save_failed"), str(e))
             return
-        self.status_bar.showMessage(f"Saved: {new_target}", 5000)
+        self.status_bar.showMessage(tr("status.saved", path=new_target), 5000)
 
     def _default_save_target(self) -> Optional[Path]:
-        """Compute ``<src_dir>/translated/<src_name>`` and validate prerequisites."""
         if self.ctx is None or self.ctx.final is None:
-            QMessageBox.information(self, "Nothing to save", "Run Translate first.")
+            QMessageBox.information(
+                self, tr("dialog.nothing_to_save_title"), tr("dialog.nothing_to_save_body")
+            )
             return None
         if self._source_path is None:
-            QMessageBox.warning(self, "No source", "Open an image before saving.")
+            QMessageBox.warning(
+                self, tr("dialog.no_source_title"), tr("dialog.no_source_body")
+            )
             return None
         return self._source_path.parent / "translated" / self._source_path.name
 
@@ -289,11 +301,30 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.side_panel.set_api_key_status(get_anthropic_key() is not None)
 
+    def _on_change_language(self) -> None:
+        dlg = LanguageDialog(current=self.config.ui_language, parent=self)
+        if dlg.exec():
+            new_lang = dlg.selected
+            if new_lang != self.config.ui_language:
+                self.config.ui_language = new_lang
+                set_language(new_lang)
+                self._save_config()
+                QMessageBox.information(
+                    self,
+                    tr("toolbar.language"),
+                    {
+                        "ko": "변경된 언어는 다음 실행부터 완전히 적용됩니다.",
+                        "en": "The new language will fully apply on next launch.",
+                    }.get(new_lang, "Restart to fully apply the new language."),
+                )
+
     # ----------------------------------------------------------------- pipeline
 
     def _on_run_phase(self, phase: str) -> None:
         if self.ctx is None:
-            QMessageBox.information(self, "No image", "Open an image first.")
+            QMessageBox.information(
+                self, tr("dialog.no_image_title"), tr("dialog.no_image_body")
+            )
             return
         if phase == PHASE_TRANSLATE and not get_anthropic_key():
             self._on_set_api_key()
@@ -303,7 +334,9 @@ class MainWindow(QMainWindow):
 
     def _on_run_all(self) -> None:
         if self.ctx is None:
-            QMessageBox.information(self, "No image", "Open an image first.")
+            QMessageBox.information(
+                self, tr("dialog.no_image_title"), tr("dialog.no_image_body")
+            )
             return
         if not get_anthropic_key():
             self._on_set_api_key()
@@ -313,13 +346,15 @@ class MainWindow(QMainWindow):
 
     def _on_render(self) -> None:
         if self.ctx is None:
-            QMessageBox.information(self, "No image", "Open an image first.")
+            QMessageBox.information(
+                self, tr("dialog.no_image_title"), tr("dialog.no_image_body")
+            )
             return
         if not self.ctx.translations:
             QMessageBox.information(
                 self,
-                "Nothing to render",
-                "Translate first (or skip-translate) before rendering.",
+                tr("dialog.nothing_to_render_title"),
+                tr("dialog.nothing_to_render_body"),
             )
             return
         self._launch_thread(step=5)
@@ -327,7 +362,6 @@ class MainWindow(QMainWindow):
     def _on_queue_process(self, paths: list, phases_label: str) -> None:
         if not paths:
             return
-        # Anything that triggers Step 4 needs an API key (unless skip-translation is on).
         needs_translate = (
             phases_label in ("translate", "all")
             and not self.config.step4.skip_translation
@@ -337,15 +371,12 @@ class MainWindow(QMainWindow):
             if not get_anthropic_key():
                 return
 
-        # Auto-save the currently-open image before the queue clobbers state.
         if self.ctx is not None and self._source_path is not None:
             try:
                 persistence.save_context(self.ctx, self._source_path)
             except Exception:  # noqa: BLE001
                 pass
 
-        # If anything in the queue already has results that this run would
-        # invalidate, ask before proceeding.
         if not self._confirm_queue_overwrite(paths, phases_label):
             return
 
@@ -362,12 +393,6 @@ class MainWindow(QMainWindow):
         )
 
     def _confirm_queue_overwrite(self, paths: list, phases_label: str) -> bool:
-        """Ask the user before overwriting existing intermediate data.
-
-        - ``detect``    → warn if any queued image already has bboxes
-        - ``translate`` → warn if any queued image already has translations
-        - ``all``       → warn if any has either bboxes or translations
-        """
         check_bboxes = phases_label in ("detect", "all")
         check_translations = phases_label in ("translate", "all")
 
@@ -391,24 +416,22 @@ class MainWindow(QMainWindow):
         sample = "\n  • ".join(affected[:8])
         if len(affected) > 8:
             sample += f"\n  …and {len(affected) - 8} more"
-        action = {
-            "detect": "Detect (this will overwrite existing bboxes)",
-            "translate": "Translate (this will overwrite existing translations)",
-            "all": "Run All (this will overwrite both bboxes and translations)",
-        }.get(phases_label, phases_label)
+        action = tr(f"dialog.queue_action.{phases_label}")
         reply = QMessageBox.question(
             self,
-            "Existing results will be overwritten",
-            f"The following {len(affected)} queued image(s) already have results:\n\n"
-            f"  • {sample}\n\n"
-            f"Proceed with {action}?",
+            tr("dialog.queue_overwrite_title"),
+            tr(
+                "dialog.queue_overwrite_body",
+                count=len(affected),
+                sample=sample,
+                action=action,
+            ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         return reply == QMessageBox.StandardButton.Yes
 
     def _on_queue_save_all(self, paths: list) -> None:
-        """Save the rendered final of every queued image (overwrite). Skip those without final."""
         if not paths:
             return
         out_dir_root = "translated"
@@ -431,7 +454,7 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 skipped += 1
         self.status_bar.showMessage(
-            f"Save all done: {saved} saved, {skipped} skipped (no final image)",
+            tr("status.save_all_done", saved=saved, skipped=skipped),
             8000,
         )
 
@@ -445,7 +468,7 @@ class MainWindow(QMainWindow):
         queue_phases: tuple = (PHASE_DETECT, PHASE_TRANSLATE),
     ) -> None:
         if self._thread is not None and self._thread.isRunning():
-            QMessageBox.information(self, "Busy", "Pipeline already running.")
+            QMessageBox.information(self, tr("dialog.busy_title"), tr("dialog.busy_body"))
             return
 
         if queue is not None:
@@ -472,14 +495,6 @@ class MainWindow(QMainWindow):
         self._thread.start()
 
     def _queue_load_fn(self, path: Path) -> Optional[PageContext]:
-        """Load a PageContext for queue runs, preferring saved metadata.
-
-        Without this, ``Translate Only`` would start each image with no
-        bboxes and immediately fail at the OCR step. The phase-specific
-        cascade-clear inside ``_run_queue_per_step`` then trims the right
-        downstream state (e.g. it does *not* clear bboxes when only the
-        Translate phase is requested).
-        """
         try:
             ctx = persistence.load_context(path)
             if ctx is not None:
@@ -514,15 +529,17 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"[Step {idx}] FAILED: {msg}", 10000)
 
     def _on_step_failed(self, idx: int, msg: str) -> None:
-        QMessageBox.critical(self, f"Step {idx} failed", msg)
+        QMessageBox.critical(self, tr("dialog.step_failed", idx=idx), msg)
 
     def _on_phase_finished(self, phase: str, ok: bool, msg: str) -> None:
         tab = self.detect_tab if phase == PHASE_DETECT else self.translate_tab
-        tab.set_status(msg or ("done" if ok else "failed"), ok=ok)
+        tab.set_status(
+            msg or (tr("tabs.status_done") if ok else tr("tabs.status_failed")),
+            ok=ok,
+        )
         if ok:
             target = 1 if phase == PHASE_DETECT else 2
             self.tabs.setCurrentIndex(target)
-        # Auto-save metadata so the user can later resume from a single click.
         if ok and self.ctx is not None and self._source_path is not None:
             try:
                 persistence.save_context(self.ctx, self._source_path)
@@ -537,12 +554,11 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self._queue_total = total
         self._queue_done = 0
-        self.status_bar.showMessage(f"Processing queue (0 / {total})…")
+        self.status_bar.showMessage(tr("status.queue_progress", total=total))
 
     def _on_queue_item_started(self, path: object, idx: int, total: int) -> None:
         p = Path(str(path))
         self.explorer.mark_queue_status(p, "running")
-        # Display the image being processed in the main view as the queue runs.
         self._load_image_path(p)
 
     def _on_queue_item_finished(self, path: object, ok: bool, msg: str) -> None:
@@ -552,13 +568,20 @@ class MainWindow(QMainWindow):
         total = getattr(self, "_queue_total", 1)
         self.progress.setValue(self._queue_done)
         self.status_bar.showMessage(
-            f"Queue: {self._queue_done} / {total}  —  last: {p.name} ({'OK' if ok else 'FAIL'}: {msg})"
+            tr(
+                "status.queue_item",
+                done=self._queue_done,
+                total=total,
+                name=p.name,
+                status="OK" if ok else "FAIL",
+                msg=msg,
+            )
         )
 
     def _on_queue_finished(self) -> None:
         self.progress.setVisible(False)
         total = getattr(self, "_queue_total", 0)
-        self.status_bar.showMessage(f"Queue done — {total} item(s) processed", 8000)
+        self.status_bar.showMessage(tr("status.queue_done", total=total), 8000)
 
     # ----------------------------------------------------------------- editing
 
@@ -568,34 +591,32 @@ class MainWindow(QMainWindow):
         if self.ctx is None or idx < 0 or idx >= len(self.ctx.bboxes):
             return
         old = self.ctx.bboxes[idx]
-        # Mutate the existing BBox object in place so OcrResult/TranslationResult
-        # references (which use ``is`` comparison) keep matching.
         old.x, old.y, old.w, old.h = int(x), int(y), int(w), int(h)
         old.area = int(w) * int(h)
-        # Geometry changed → cleaned/final become stale.
         self.ctx.cleaned = None
         self.ctx.final = None
         self.status_bar.showMessage(
-            f"Bbox #{idx} → ({x}, {y}, {w}×{h}) — press Render to refresh",
+            tr("status.bbox_changed", idx=idx, x=x, y=y, w=w, h=h),
             5000,
         )
         self._auto_save_metadata()
 
     def _on_bbox_add(self) -> None:
         if self.ctx is None or self.ctx.source is None:
-            QMessageBox.information(self, "No image", "Open an image first.")
+            QMessageBox.information(
+                self, tr("dialog.no_image_title"), tr("dialog.no_image_body")
+            )
             return
         h, w = self.ctx.source.shape[:2]
         bw, bh = min(160, w // 4), min(80, h // 6)
         x = max(0, (w - bw) // 2)
         y = max(0, (h - bh) // 2)
         self.ctx.bboxes.append(BBox(x=x, y=y, w=bw, h=bh, area=bw * bh))
-        # New bbox isn't translated yet → invalidate downstream.
         self.ctx.cleaned = None
         self.ctx.final = None
         self._refresh_tabs(self.ctx)
         self.status_bar.showMessage(
-            f"Added bbox at ({x}, {y}) {bw}×{bh} — toggle Edit to drag/resize",
+            tr("status.bbox_added", x=x, y=y, w=bw, h=bh),
             6000,
         )
         self._auto_save_metadata()
@@ -603,13 +624,12 @@ class MainWindow(QMainWindow):
     def _on_text_offset_changed(self, idx: int, ox: int, oy: int) -> None:
         if self.ctx is None or idx < 0 or idx >= len(self.ctx.translations):
             return
-        tr = self.ctx.translations[idx]
-        tr.text_offset_x = int(ox)
-        tr.text_offset_y = int(oy)
-        # Offset only affects rendering; cleaned image is still valid.
+        tr_item = self.ctx.translations[idx]
+        tr_item.text_offset_x = int(ox)
+        tr_item.text_offset_y = int(oy)
         self.ctx.final = None
         self.status_bar.showMessage(
-            f"Translation #{idx} offset → ({ox}, {oy}) — press Render to refresh",
+            tr("status.translation_offset", idx=idx, ox=ox, oy=oy),
             5000,
         )
         self._auto_save_metadata()
@@ -630,50 +650,49 @@ class MainWindow(QMainWindow):
         self.ctx.translations = [
             t for t in self.ctx.translations if t.bbox is not bbox
         ]
-        # Cleaned no longer matches the new bbox set; force rebuild on next Render.
         self.ctx.cleaned = None
         self.ctx.final = None
         self._refresh_tabs(self.ctx)
-        msg = f"Deleted bbox #{idx} — {len(self.ctx.bboxes)} remaining"
+        msg = tr(
+            "status.bbox_deleted", idx=idx, remaining=len(self.ctx.bboxes)
+        )
         if self.ctx.translations:
-            msg += " — press Render to refresh the final image"
+            msg += tr("status.bbox_deleted_render_hint")
         self.status_bar.showMessage(msg, 6000)
 
     def _on_translation_edit(self, idx: int) -> None:
         if self.ctx is None or idx < 0 or idx >= len(self.ctx.translations):
             return
-        tr = self.ctx.translations[idx]
+        tr_item = self.ctx.translations[idx]
         dlg = TranslationEditDialog(
-            tr.text_ja,
-            tr.text_ko,
-            ignore_boundary=True,
-            font_path=tr.font_path,
-            font_pt=tr.font_pt,
-            text_align=getattr(tr, "text_align", "center") or "center",
-            text_rotation=int(getattr(tr, "text_rotation", 0) or 0),
-            available_fonts=self.config.fonts,
+            tr_item.text_ja,
+            tr_item.text_ko,
+            font_path=tr_item.font_path,
+            font_pt=tr_item.font_pt,
+            text_align=getattr(tr_item, "text_align", "center") or "center",
+            text_rotation=int(getattr(tr_item, "text_rotation", 0) or 0),
+            available_fonts=self.side_panel.known_fonts,
             default_font_pt=self.config.step5.outside_pt,
             parent=self,
         )
         if dlg.exec():
-            current_align = getattr(tr, "text_align", "center") or "center"
-            current_rotation = int(getattr(tr, "text_rotation", 0) or 0)
+            current_align = getattr(tr_item, "text_align", "center") or "center"
+            current_rotation = int(getattr(tr_item, "text_rotation", 0) or 0)
             changed = (
-                dlg.korean != tr.text_ko
-                or dlg.ignore_boundary != tr.ignore_boundary
-                or dlg.font_path != tr.font_path
-                or dlg.font_pt != tr.font_pt
+                dlg.korean != tr_item.text_ko
+                or dlg.font_path != tr_item.font_path
+                or dlg.font_pt != tr_item.font_pt
                 or dlg.text_align != current_align
                 or dlg.text_rotation != current_rotation
             )
             if changed:
-                tr.text_ko = dlg.korean
-                tr.ignore_boundary = dlg.ignore_boundary
-                tr.font_path = dlg.font_path
-                tr.font_pt = dlg.font_pt
-                tr.text_align = dlg.text_align
-                tr.text_rotation = dlg.text_rotation
-                # Render only — keep cached ctx.cleaned (mask unchanged).
+                tr_item.text_ko = dlg.korean
+                # Always centered on bbox now.
+                tr_item.ignore_boundary = True
+                tr_item.font_path = dlg.font_path
+                tr_item.font_pt = dlg.font_pt
+                tr_item.text_align = dlg.text_align
+                tr_item.text_rotation = dlg.text_rotation
                 self.ctx.final = None
                 self._refresh_tabs(self.ctx)
                 self._launch_thread(step=5)
@@ -692,8 +711,6 @@ class MainWindow(QMainWindow):
             pass
 
     def _push_render_defaults(self) -> None:
-        """Tell the Translate tab which font/size the renderer would use, so
-        Move-Text previews match the actual rendering."""
         font_path = self.config.step5.font_path or None
         if not font_path:
             try:

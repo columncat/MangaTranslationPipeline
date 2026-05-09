@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from PIL import ImageFont
 
@@ -21,6 +21,8 @@ WINDOWS_FONT_DIRS = [
     Path("C:/Windows/Fonts"),
 ]
 
+FONT_GLOBS = ("*.ttf", "*.otf", "*.ttc", "*.TTF", "*.OTF", "*.TTC")
+
 
 def _has_korean_glyph(font_path: Path) -> bool:
     try:
@@ -31,8 +33,32 @@ def _has_korean_glyph(font_path: Path) -> bool:
         return False
 
 
+def _iter_font_files(folder: Path) -> Iterable[Path]:
+    if not folder.exists():
+        return ()
+    seen: set[str] = set()
+    out: list[Path] = []
+    for pattern in FONT_GLOBS:
+        for p in folder.glob(pattern):
+            key = str(p).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(p)
+    return out
+
+
+def list_bundled_fonts() -> list[Path]:
+    """Return absolute paths of every font file inside the project's fonts/ folder.
+
+    No Korean-glyph filter — the user is responsible for what they put there.
+    Sorted by file name (case-insensitive) for stable UI ordering.
+    """
+    return sorted(_iter_font_files(FONTS_DIR), key=lambda p: p.name.lower())
+
+
 def find_default_font() -> Optional[Path]:
-    bundled = list(FONTS_DIR.glob("*.[ot]t[fc]"))
+    bundled = list(_iter_font_files(FONTS_DIR))
     for p in bundled:
         if _has_korean_glyph(p):
             return p
