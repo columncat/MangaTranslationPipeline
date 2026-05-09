@@ -21,7 +21,7 @@ class Step2Params(BaseModel):
     kernel_h: int = 15
     iterations: int = 1
     min_area: int = 200
-    max_area_ratio: float = 0.5
+    max_area_ratio: float = 0.7
 
 
 class Step4Params(BaseModel):
@@ -36,9 +36,9 @@ class Step5Params(BaseModel):
     font_path: str = ""
     padding: int = 4
     min_pt: int = 10
-    max_pt: int = 48
-    outside_pt: int = 36
-    line_spacing: float = 1.15
+    max_pt: int = 40
+    outside_pt: int = 25
+    line_spacing: float = 1.10
     stroke_px: int = 2
     fill_rgb: tuple[int, int, int] = (0, 0, 0)
     stroke_rgb: tuple[int, int, int] = (255, 255, 255)
