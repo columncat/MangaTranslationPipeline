@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, QThread
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
@@ -28,6 +28,7 @@ from ..utils.secrets import get_anthropic_key
 from .dialogs import TranslationEditDialog
 from .explorer import ExplorerPanel
 from .language_dialog import LanguageDialog
+from .save_all_dialog import SaveAllProgressDialog
 from .settings_dialog import ApiKeyDialog
 from .side_panel import SidePanel
 from .tabs import DetectTab, SourceTab, TranslateTab
@@ -40,10 +41,16 @@ from .workers import (
 
 
 class MainWindow(QMainWindow):
+    # Image extensions accepted via drag-and-drop. Anything else is ignored.
+    _DND_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif"}
+
     def __init__(self, config: Optional[AppConfig] = None):
         super().__init__()
         self.setWindowTitle(tr("app.title"))
         self.resize(1400, 900)
+        # Accept dropped files / folders at the window level so the user
+        # can drop anywhere — main view, sidebar, toolbar, etc.
+        self.setAcceptDrops(True)
 
         self.config = config if config is not None else AppConfig.load()
         self.ctx: Optional[PageContext] = None
@@ -462,29 +469,10 @@ class MainWindow(QMainWindow):
     def _on_queue_save_all(self, paths: list) -> None:
         if not paths:
             return
-        out_dir_root = "translated"
-        saved = 0
-        skipped = 0
-        for raw in paths:
-            p = Path(str(raw))
-            try:
-                ctx = persistence.load_context(p)
-            except Exception:  # noqa: BLE001
-                ctx = None
-            if ctx is None or ctx.final is None:
-                skipped += 1
-                continue
-            target = p.parent / out_dir_root / p.name
-            try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                save_image(ctx.final, target)
-                saved += 1
-            except Exception:  # noqa: BLE001
-                skipped += 1
-        self.status_bar.showMessage(
-            tr("status.save_all_done", saved=saved, skipped=skipped),
-            8000,
-        )
+        path_objs = [Path(str(p)) for p in paths]
+        dlg = SaveAllProgressDialog(path_objs, parent=self)
+        dlg.start()
+        dlg.exec()
 
     def _launch_thread(
         self,
@@ -772,16 +760,28 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentIndex(idx + 1)
 
     def _on_nav_prev_image(self) -> None:
-        # Disable navigation while the queue worker is writing — switching
-        # images mid-run would race with save_fn.
-        if self._queue_active:
-            return
-        self.explorer.select_relative(-1, current=self._source_path)
+        self._nav_image(delta=-1)
 
     def _on_nav_next_image(self) -> None:
+        self._nav_image(delta=+1)
+
+    def _nav_image(self, *, delta: int) -> None:
+        """Up/Down arrow navigation.
+
+        If the currently-shown image is in the work queue, navigation is
+        constrained to the queue (so a user processing 30 chapter pages
+        doesn't wander off into unrelated files). Otherwise it walks the
+        folder browser. Disabled while the queue worker is writing.
+        """
         if self._queue_active:
             return
-        self.explorer.select_relative(+1, current=self._source_path)
+        if (
+            self._source_path is not None
+            and self.explorer.is_in_queue(self._source_path)
+        ):
+            self.explorer.select_relative_in_queue(delta, current=self._source_path)
+        else:
+            self.explorer.select_relative(delta, current=self._source_path)
 
     def _save_config(self) -> None:
         try:
@@ -801,6 +801,57 @@ class MainWindow(QMainWindow):
             font_path=font_path,
             default_pt=int(self.config.step5.outside_pt),
         )
+
+    # ----------------------------------------------------------------- DnD
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # type: ignore[override]
+        if event.mimeData().hasUrls():
+            # Any local URL (file or folder) is fair game; the actual
+            # filtering happens in dropEvent.
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:  # type: ignore[override]
+        if not event.mimeData().hasUrls():
+            event.ignore()
+            return
+        urls = [u for u in event.mimeData().urls() if u.isLocalFile()]
+        if not urls:
+            event.ignore()
+            return
+
+        first_path = Path(urls[0].toLocalFile())
+        # Folder drop: point the explorer at it and load the first image.
+        if first_path.is_dir():
+            self.explorer.set_folder(first_path)
+            for p in sorted(first_path.iterdir(), key=lambda x: x.name.lower()):
+                if (
+                    p.is_file()
+                    and p.suffix.lower() in self._DND_IMAGE_EXTS
+                ):
+                    self._load_image_path(p)
+                    break
+            event.acceptProposedAction()
+            return
+
+        # File drop: only image files. Open the first matching file and
+        # set the explorer to its parent folder so prev/next nav works.
+        image_files = [
+            Path(u.toLocalFile())
+            for u in urls
+            if Path(u.toLocalFile()).is_file()
+            and Path(u.toLocalFile()).suffix.lower() in self._DND_IMAGE_EXTS
+        ]
+        if not image_files:
+            event.ignore()
+            return
+        target = image_files[0]
+        self.explorer.set_folder(target.parent)
+        self._load_image_path(target)
+        event.acceptProposedAction()
 
     def closeEvent(self, event):  # type: ignore[override]
         self._save_config()

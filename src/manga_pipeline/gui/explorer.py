@@ -182,37 +182,67 @@ class ExplorerPanel(QWidget):
             for i in range(self.file_list.count())
         ]
 
-    def select_relative(self, delta: int, current: Optional[Path] = None) -> None:
-        """Jump ``delta`` images forward/backward in the folder browser.
+    def _select_relative_in_list(
+        self,
+        list_widget: QListWidget,
+        delta: int,
+        current: Optional[Path],
+    ) -> bool:
+        """Move the current selection in ``list_widget`` by ``delta`` rows.
 
-        ``current`` is the path currently displayed in the main view; we use
-        it to find our index even when no row is selected. Falls back to the
-        list's current row otherwise. No-op if there are no images.
+        Returns ``True`` if a new image was emitted, ``False`` otherwise
+        (empty list, or single-element list with delta off the edge — then
+        the caller may want to fall back to a different list).
         """
-        items_count = self.file_list.count()
+        items_count = list_widget.count()
         if items_count == 0:
-            return
+            return False
         idx = -1
         if current is not None:
             target = str(current)
             for i in range(items_count):
-                if self.file_list.item(i).data(Qt.ItemDataRole.UserRole) == target:
+                if list_widget.item(i).data(Qt.ItemDataRole.UserRole) == target:
                     idx = i
                     break
         if idx < 0:
-            idx = self.file_list.currentRow()
+            idx = list_widget.currentRow()
         if idx < 0:
             idx = 0 if delta > 0 else items_count - 1
         else:
             idx = max(0, min(items_count - 1, idx + delta))
-        item = self.file_list.item(idx)
+        item = list_widget.item(idx)
         if item is None:
-            return
-        self.file_list.setCurrentRow(idx)
-        self.file_list.scrollToItem(item)
+            return False
+        list_widget.setCurrentRow(idx)
+        list_widget.scrollToItem(item)
         p = item.data(Qt.ItemDataRole.UserRole)
-        if p:
-            self.image_selected.emit(Path(p))
+        if not p:
+            return False
+        self.image_selected.emit(Path(p))
+        return True
+
+    def is_in_queue(self, path: Path) -> bool:
+        target = str(path)
+        for i in range(self.queue_list.count()):
+            if self.queue_list.item(i).data(Qt.ItemDataRole.UserRole) == target:
+                return True
+        return False
+
+    def select_relative(self, delta: int, current: Optional[Path] = None) -> None:
+        """Jump ``delta`` images forward/backward in the folder browser."""
+        self._select_relative_in_list(self.file_list, delta, current)
+
+    def select_relative_in_queue(
+        self, delta: int, current: Optional[Path] = None
+    ) -> bool:
+        """Jump ``delta`` images forward/backward inside the work queue.
+
+        Returns ``True`` if navigation happened. Returns ``False`` if the
+        queue is empty so callers can fall back to folder navigation.
+        """
+        if self.queue_list.count() == 0:
+            return False
+        return self._select_relative_in_list(self.queue_list, delta, current)
 
     # ---- queue ----
 
