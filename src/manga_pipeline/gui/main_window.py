@@ -101,6 +101,7 @@ class MainWindow(QMainWindow):
         self.translate_tab.bbox_delete_requested.connect(self._on_bbox_delete)
         self.translate_tab.translation_edit_requested.connect(self._on_translation_edit)
         self.translate_tab.text_offset_changed.connect(self._on_text_offset_changed)
+        self.translate_tab.render_requested.connect(self._on_render)
 
     def _build_explorer(self) -> None:
         self.explorer = ExplorerPanel()

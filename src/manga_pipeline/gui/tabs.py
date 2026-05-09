@@ -180,6 +180,10 @@ class TranslateTab(PhaseTabWidget):
     bbox_delete_requested = Signal(int)
     translation_edit_requested = Signal(int)
     text_offset_changed = Signal(int, int, int)
+    # Fired when the user disables Move-Text mode so the main window can
+    # re-run Step 5 to bake in any text positions that were dragged while
+    # the mode was active.
+    render_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(phase="translate", title=tr("tabs.title.translate"), parent=parent)
@@ -227,6 +231,7 @@ class TranslateTab(PhaseTabWidget):
             self.update_from_context(self._ctx)
 
     def _on_toggle_move_text(self, checked: bool) -> None:
+        was_active = self._move_text
         self._move_text = checked
         self.view.setDragMode(
             QGraphicsView.DragMode.NoDrag
@@ -235,6 +240,13 @@ class TranslateTab(PhaseTabWidget):
         )
         if self._ctx:
             self.update_from_context(self._ctx)
+        # Disabling the mode → kick off a render so the user immediately
+        # sees the text in its dragged-to position baked into the final
+        # image, instead of having to press Render manually. Skipped if
+        # there are no translations (renderer would error anyway) or if
+        # the toggle didn't actually change state.
+        if was_active and not checked and self._ctx and self._ctx.translations:
+            self.render_requested.emit()
 
     def set_render_defaults(self, font_path: Optional[str], default_pt: int) -> None:
         self._default_font_path = font_path or None
