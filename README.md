@@ -3,9 +3,6 @@
 일본어 만화를 한국어(혹은 다른 언어)로 번역하는 5단계 AI 파이프라인 데스크톱 앱.  
 각 단계의 결과를 탭별로 시각 확인하고, 원하는 단계만 골라 재실행할 수 있습니다.
 
-> **라이선스**: 이 프로젝트는 [GPL-3.0](LICENSE) 라이선스로 배포됩니다.  
-> 런타임 의존성인 [comic-text-detector](https://github.com/dmMaze/comic-text-detector)가 GPL-3.0이기 때문입니다.
-
 ---
 
 ## 시연 영상
@@ -81,6 +78,8 @@ A 5-stage AI pipeline desktop app that translates Japanese manga into Korean(or 
 Each stage result can be reviewed in its own tab, and any stage can be re-run independently.
 
 > **License**: This project is distributed under [GPL-3.0](LICENSE) due to its runtime dependency on [comic-text-detector](https://github.com/dmMaze/comic-text-detector) (GPL-3.0).
+
+Destination languages can be changed by modifying the AI prompt under src/manga_pipeline/pipeline/step4_translate.py
 
 ---
 
