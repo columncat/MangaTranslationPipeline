@@ -19,6 +19,7 @@ from typing import Optional
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -31,6 +32,15 @@ from PySide6.QtWidgets import (
 )
 
 from ..i18n import tr
+
+
+# Modifier mask used to suppress "load this image" on extending clicks so the
+# user can build a multi-selection (for queue-add) without thrashing the main
+# view.
+_MULTISELECT_MODIFIERS = (
+    Qt.KeyboardModifier.ShiftModifier
+    | Qt.KeyboardModifier.ControlModifier
+)
 
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif"}
 
@@ -171,9 +181,13 @@ class ExplorerPanel(QWidget):
                 self.file_list.addItem(item)
 
     def _on_file_clicked(self, item: QListWidgetItem) -> None:
+        # Shift/Ctrl-click is a multi-select gesture (for queueing). Do not
+        # touch the selection or load the image — the previous behaviour
+        # collapsed the user's range selection to just the clicked row.
+        if QApplication.keyboardModifiers() & _MULTISELECT_MODIFIERS:
+            return
         p = item.data(Qt.ItemDataRole.UserRole)
         if p:
-            self.file_list.setCurrentItem(item)
             self.image_selected.emit(Path(p))
 
     def _file_paths(self) -> list[Path]:
@@ -261,6 +275,8 @@ class ExplorerPanel(QWidget):
             self.queue_list.addItem(qi)
 
     def _on_queue_clicked(self, item: QListWidgetItem) -> None:
+        if QApplication.keyboardModifiers() & _MULTISELECT_MODIFIERS:
+            return
         p = item.data(Qt.ItemDataRole.UserRole)
         if p:
             self.image_selected.emit(Path(p))
