@@ -88,6 +88,17 @@ def save_context(ctx: PageContext, source_path: Path) -> Path:
                 "text_offset_y": int(t.text_offset_y or 0),
                 "text_align": getattr(t, "text_align", "center") or "center",
                 "text_rotation": int(getattr(t, "text_rotation", 0) or 0),
+                "fill_rgb": (
+                    list(t.fill_rgb) if getattr(t, "fill_rgb", None) is not None else None
+                ),
+                "stroke_rgb": (
+                    list(t.stroke_rgb)
+                    if getattr(t, "stroke_rgb", None) is not None
+                    else None
+                ),
+                "bg_fill_enabled": bool(getattr(t, "bg_fill_enabled", False)),
+                "bg_fill_rgb": list(getattr(t, "bg_fill_rgb", (255, 255, 255))),
+                "bg_fill_pad": int(getattr(t, "bg_fill_pad", 6)),
             }
             for t in ctx.translations
             if id(t.bbox) in bbox_idx
@@ -143,6 +154,9 @@ def load_context(source_path: Path) -> Optional[PageContext]:
     for t in payload.get("translations", []):
         idx = int(t.get("bbox_idx", -1))
         if 0 <= idx < len(bboxes):
+            fill_raw = t.get("fill_rgb")
+            stroke_raw = t.get("stroke_rgb")
+            bg_raw = t.get("bg_fill_rgb", [255, 255, 255])
             translations.append(
                 TranslationResult(
                     bbox=bboxes[idx],
@@ -155,6 +169,11 @@ def load_context(source_path: Path) -> Optional[PageContext]:
                     text_offset_y=int(t.get("text_offset_y", 0) or 0),
                     text_align=str(t.get("text_align", "center") or "center"),
                     text_rotation=int(t.get("text_rotation", 0) or 0),
+                    fill_rgb=tuple(fill_raw) if fill_raw else None,
+                    stroke_rgb=tuple(stroke_raw) if stroke_raw else None,
+                    bg_fill_enabled=bool(t.get("bg_fill_enabled", False)),
+                    bg_fill_rgb=tuple(bg_raw) if bg_raw else (255, 255, 255),
+                    bg_fill_pad=int(t.get("bg_fill_pad", 6) or 6),
                 )
             )
 

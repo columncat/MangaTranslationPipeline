@@ -710,19 +710,36 @@ class MainWindow(QMainWindow):
             font_pt=tr_item.font_pt,
             text_align=getattr(tr_item, "text_align", "center") or "center",
             text_rotation=int(getattr(tr_item, "text_rotation", 0) or 0),
+            fill_rgb=getattr(tr_item, "fill_rgb", None),
+            stroke_rgb=getattr(tr_item, "stroke_rgb", None),
+            bg_fill_enabled=bool(getattr(tr_item, "bg_fill_enabled", False)),
+            bg_fill_rgb=tuple(getattr(tr_item, "bg_fill_rgb", (255, 255, 255))),
+            bg_fill_pad=int(getattr(tr_item, "bg_fill_pad", 6)),
             available_fonts=self.side_panel.known_fonts,
             default_font_pt=self.config.step5.outside_pt,
+            default_fill_rgb=tuple(self.config.step5.fill_rgb),
+            default_stroke_rgb=tuple(self.config.step5.stroke_rgb),
             parent=self,
         )
         if dlg.exec():
             current_align = getattr(tr_item, "text_align", "center") or "center"
             current_rotation = int(getattr(tr_item, "text_rotation", 0) or 0)
+            current_fill = getattr(tr_item, "fill_rgb", None)
+            current_stroke = getattr(tr_item, "stroke_rgb", None)
+            current_bg_on = bool(getattr(tr_item, "bg_fill_enabled", False))
+            current_bg_rgb = tuple(getattr(tr_item, "bg_fill_rgb", (255, 255, 255)))
+            current_bg_pad = int(getattr(tr_item, "bg_fill_pad", 6))
             changed = (
                 dlg.korean != tr_item.text_ko
                 or dlg.font_path != tr_item.font_path
                 or dlg.font_pt != tr_item.font_pt
                 or dlg.text_align != current_align
                 or dlg.text_rotation != current_rotation
+                or dlg.fill_rgb != current_fill
+                or dlg.stroke_rgb != current_stroke
+                or dlg.bg_fill_enabled != current_bg_on
+                or dlg.bg_fill_rgb != current_bg_rgb
+                or dlg.bg_fill_pad != current_bg_pad
             )
             if changed:
                 tr_item.text_ko = dlg.korean
@@ -732,6 +749,11 @@ class MainWindow(QMainWindow):
                 tr_item.font_pt = dlg.font_pt
                 tr_item.text_align = dlg.text_align
                 tr_item.text_rotation = dlg.text_rotation
+                tr_item.fill_rgb = dlg.fill_rgb
+                tr_item.stroke_rgb = dlg.stroke_rgb
+                tr_item.bg_fill_enabled = dlg.bg_fill_enabled
+                tr_item.bg_fill_rgb = dlg.bg_fill_rgb
+                tr_item.bg_fill_pad = dlg.bg_fill_pad
                 self.ctx.final = None
                 self._refresh_tabs(self.ctx)
                 self._launch_thread(step=5)

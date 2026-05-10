@@ -202,6 +202,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "edit.align_right": "Right",
         "edit.rotation": "Rotation:",
         "edit.rotation_tip": "Counter-clockwise rotation around the bbox center.",
+        "edit.text_color": "Text color:",
+        "edit.stroke_color": "Stroke color:",
+        "edit.color_reset": "Reset",
+        "edit.color_pick_title": "Pick a color",
+        "edit.bg_fill": "Fill text background (ellipse)",
+        "edit.bg_fill_tip": "Draws an opaque ellipse behind the rendered text — useful for white text on busy art.",
+        "edit.bg_fill_pad": "Padding:",
     },
     "ko": {
         "app.title": "만화 번역 파이프라인",
@@ -376,6 +383,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "edit.align_right": "오른쪽",
         "edit.rotation": "회전:",
         "edit.rotation_tip": "Bbox 중심 기준 반시계 방향 회전.",
+        "edit.text_color": "글자 색:",
+        "edit.stroke_color": "윤곽선 색:",
+        "edit.color_reset": "초기화",
+        "edit.color_pick_title": "색상 선택",
+        "edit.bg_fill": "텍스트 배경 칠하기 (타원)",
+        "edit.bg_fill_tip": "렌더된 텍스트 뒤에 불투명한 타원을 그립니다. 복잡한 배경 위 흰 글씨 등에 유용합니다.",
+        "edit.bg_fill_pad": "여백:",
     },
 }
 

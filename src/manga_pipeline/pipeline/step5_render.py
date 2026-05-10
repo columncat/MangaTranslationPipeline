@@ -72,12 +72,22 @@ def _render_text_block_to_buffer(
     font: ImageFont.FreeTypeFont,
     params: Step5Params,
     align: str,
+    *,
+    fill_rgb: Optional[tuple[int, int, int]] = None,
+    stroke_rgb: Optional[tuple[int, int, int]] = None,
+    bg_fill_rgb: Optional[tuple[int, int, int]] = None,
+    bg_fill_pad: int = 6,
 ) -> Image.Image:
     """Render multi-line text onto a transparent RGBA image.
 
     The block's geometric center is the natural anchor — callers paste the
     buffer so its center lands on the desired (x, y) on the final image.
     Padding around the buffer prevents stroke clipping when rotated.
+
+    ``fill_rgb`` / ``stroke_rgb`` override the Step5Params defaults per
+    item. ``bg_fill_rgb`` (when not None) draws an opaque ellipse behind
+    the text whose bounding box is the rendered text plus ``bg_fill_pad``
+    pixels of padding on each side.
     """
     measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     if not lines:
@@ -87,13 +97,35 @@ def _render_text_block_to_buffer(
     line_h = font.size
     block_h = int(line_h * params.line_spacing * (len(lines) - 1)) + line_h
 
-    pad = max(2, int(params.stroke_px) + 2)
+    fill = fill_rgb if fill_rgb is not None else params.fill_rgb
+    stroke = stroke_rgb if stroke_rgb is not None else params.stroke_rgb
+
+    # Outer padding around the buffer protects the stroke when the buffer
+    # is later rotated. The ellipse padding is added on top of that so the
+    # ellipse sits outside the text but inside the rotation-safe margin.
+    stroke_pad = max(2, int(params.stroke_px) + 2)
+    ellipse_pad = max(0, int(bg_fill_pad)) if bg_fill_rgb is not None else 0
+    pad = stroke_pad + ellipse_pad
     buf = Image.new(
         "RGBA",
         (max(1, block_w + 2 * pad), max(1, block_h + 2 * pad)),
         (0, 0, 0, 0),
     )
     bdraw = ImageDraw.Draw(buf)
+
+    if bg_fill_rgb is not None:
+        # Ellipse fits the text block expanded by ``ellipse_pad`` on each
+        # side. The shape is fully opaque so the dialogue reads cleanly
+        # even on busy backgrounds.
+        ex0 = stroke_pad - ellipse_pad
+        ey0 = stroke_pad - ellipse_pad
+        ex1 = stroke_pad + block_w + ellipse_pad
+        ey1 = stroke_pad + block_h + ellipse_pad
+        # Clamp so we don't draw negative-width ellipses on absurd input.
+        ex0 = max(0, ex0)
+        ey0 = max(0, ey0)
+        bdraw.ellipse((ex0, ey0, ex1, ey1), fill=(*bg_fill_rgb, 255))
+
     for i, ln in enumerate(lines):
         line_w = line_widths[i]
         if align == "left":
@@ -107,9 +139,9 @@ def _render_text_block_to_buffer(
             (lx, ly),
             ln,
             font=font,
-            fill=params.fill_rgb,
+            fill=fill,
             stroke_width=params.stroke_px,
-            stroke_fill=params.stroke_rgb,
+            stroke_fill=stroke,
         )
     return buf
 
@@ -157,7 +189,27 @@ class KoreanRenderer:
             cx = item.bbox.x + item.bbox.w // 2 + ox
             cy = item.bbox.y + item.bbox.h // 2 + oy
 
-            buf = _render_text_block_to_buffer(lines, font, params, align)
+            # Per-item colour overrides; fall back to Step5Params defaults.
+            item_fill = getattr(item, "fill_rgb", None)
+            item_stroke = getattr(item, "stroke_rgb", None)
+            bg_enabled = bool(getattr(item, "bg_fill_enabled", False))
+            bg_rgb = (
+                tuple(getattr(item, "bg_fill_rgb", (255, 255, 255)))
+                if bg_enabled
+                else None
+            )
+            bg_pad = int(getattr(item, "bg_fill_pad", 6))
+
+            buf = _render_text_block_to_buffer(
+                lines,
+                font,
+                params,
+                align,
+                fill_rgb=tuple(item_fill) if item_fill is not None else None,
+                stroke_rgb=tuple(item_stroke) if item_stroke is not None else None,
+                bg_fill_rgb=bg_rgb,
+                bg_fill_pad=bg_pad,
+            )
             if rotation:
                 buf = buf.rotate(
                     rotation, expand=True, resample=Image.BICUBIC

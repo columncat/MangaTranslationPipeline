@@ -55,6 +55,17 @@ class TranslationResult:
     # Counter-clockwise rotation in degrees applied to the rendered text
     # block around the bbox center (after ``text_offset``).
     text_rotation: int = 0
+    # Per-dialogue colour overrides. ``None`` falls back to Step5Params
+    # defaults (black fill, white stroke). Stored as RGB triples.
+    fill_rgb: Optional[tuple[int, int, int]] = None
+    stroke_rgb: Optional[tuple[int, int, int]] = None
+    # Optional ellipse drawn behind the rendered text block as a backdrop
+    # (for white text on busy art). Disabled by default.
+    bg_fill_enabled: bool = False
+    bg_fill_rgb: tuple[int, int, int] = (255, 255, 255)
+    # Padding (px) added around the text bounding box before fitting the
+    # ellipse to it. Larger values produce a roomier oval.
+    bg_fill_pad: int = 6
 
 
 @dataclass
