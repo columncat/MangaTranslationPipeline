@@ -37,6 +37,10 @@ class TranslationResult:
     bbox: BBox
     text_ja: str
     text_ko: str
+    # Optional per-bbox inpainting mask in bbox-local coordinates
+    # (shape == (bbox.h, bbox.w), uint8, 0 = keep original, 255 = inpaint).
+    # When None, Step 5 falls back to using the full bbox rectangle.
+    bbox_mask: Optional["np.ndarray"] = field(default=None, repr=False)
     # Default True: text is centered on the bbox center at a fixed font size
     # and only breaks on user-inserted (or Claude-inserted) "\n" characters.
     # Toggle off in the Edit Translation dialog to fall back to bbox-fit.

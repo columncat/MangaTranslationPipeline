@@ -25,15 +25,36 @@ def build_inpaint_mask(
 ) -> np.ndarray:
     """Mask for inpainting — limited to the bboxes of currently-kept translations.
 
+    Per-bbox masks (``TranslationResult.bbox_mask``, an ``(h, w)`` uint8
+    array in bbox-local coordinates) take precedence — pixels marked
+    non-zero are pasted into the global bbox-union as inpaint targets.
+    For translations without a custom mask the full bbox rectangle is
+    used (the v1.0 behaviour).
+
     If ``base_mask`` (the precise text mask) is provided, the result is
-    ``base_mask AND bbox_union`` so unrelated detections outside translated
-    bboxes are spared. Otherwise the bbox rectangles are used directly.
+    ``base_mask AND bbox_union`` so unrelated detections outside the
+    chosen regions are spared. ``dilate_px`` is applied last so the
+    inpainter has a small bleed margin around the mask.
     """
     h, w = shape_hw
     bbox_union = np.zeros((h, w), dtype=np.uint8)
     for tr in translations:
         b = tr.bbox
-        cv2.rectangle(bbox_union, (b.x, b.y), (b.x + b.w, b.y + b.h), 255, -1)
+        custom = getattr(tr, "bbox_mask", None)
+        if custom is not None and custom.shape[:2] == (b.h, b.w):
+            # Composite the per-bbox mask into the page-sized canvas.
+            # Clip in case the bbox falls partially out of the image.
+            x0, y0 = max(0, b.x), max(0, b.y)
+            x1, y1 = min(w, b.x + b.w), min(h, b.y + b.h)
+            if x1 <= x0 or y1 <= y0:
+                continue
+            sub = custom[y0 - b.y : y1 - b.y, x0 - b.x : x1 - b.x]
+            # The mask is OR-blended so multiple overlapping bboxes
+            # behave like a union.
+            patch = bbox_union[y0:y1, x0:x1]
+            np.maximum(patch, (sub > 0).astype(np.uint8) * 255, out=patch)
+        else:
+            cv2.rectangle(bbox_union, (b.x, b.y), (b.x + b.w, b.y + b.h), 255, -1)
 
     if base_mask is not None and base_mask.shape[:2] == (h, w):
         result = cv2.bitwise_and(base_mask, bbox_union)

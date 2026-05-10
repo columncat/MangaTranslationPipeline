@@ -42,6 +42,11 @@ def _paths_for(source_path: Path) -> dict[str, Path]:
     }
 
 
+def _bbox_mask_path(source_path: Path, bbox_idx: int) -> Path:
+    d = metadata_dir(source_path)
+    return d / f"{Path(source_path).stem}_bboxmask_{bbox_idx}.png"
+
+
 def has_metadata(source_path: Path) -> bool:
     return _paths_for(source_path)["json"].exists()
 
@@ -116,6 +121,23 @@ def save_context(ctx: PageContext, source_path: Path) -> Path:
     if ctx.final is not None:
         Image.fromarray(_as_uint8(ctx.final)).save(paths["final"])
 
+    # Per-bbox inpainting masks. Drop any prior sidecars for this source
+    # first so renamed/deleted bboxes don't leave orphan files behind.
+    stem = Path(source_path).stem
+    for old in metadata_dir(source_path).glob(f"{stem}_bboxmask_*.png"):
+        try:
+            old.unlink()
+        except OSError:  # noqa: BLE001
+            pass
+    for tr_item in ctx.translations:
+        idx = bbox_idx.get(id(tr_item.bbox), -1)
+        if idx < 0:
+            continue
+        mask = getattr(tr_item, "bbox_mask", None)
+        if mask is None:
+            continue
+        Image.fromarray(_as_uint8(mask)).save(_bbox_mask_path(source_path, idx))
+
     return paths["json"]
 
 
@@ -157,9 +179,17 @@ def load_context(source_path: Path) -> Optional[PageContext]:
             fill_raw = t.get("fill_rgb")
             stroke_raw = t.get("stroke_rgb")
             bg_raw = t.get("bg_fill_rgb", [255, 255, 255])
+            # Per-bbox mask sidecar: <stem>_bboxmask_<idx>.png. Loaded as
+            # uint8 grayscale; if shape doesn't match the bbox we drop it
+            # rather than risk a misaligned inpaint.
+            bm_path = _bbox_mask_path(source_path, idx)
+            bm = _load_image(bm_path, "L")
+            bbox = bboxes[idx]
+            if bm is not None and bm.shape[:2] != (bbox.h, bbox.w):
+                bm = None
             translations.append(
                 TranslationResult(
-                    bbox=bboxes[idx],
+                    bbox=bbox,
                     text_ja=str(t.get("text_ja", "")),
                     text_ko=str(t.get("text_ko", "")),
                     ignore_boundary=bool(t.get("ignore_boundary", True)),
@@ -174,6 +204,7 @@ def load_context(source_path: Path) -> Optional[PageContext]:
                     bg_fill_enabled=bool(t.get("bg_fill_enabled", False)),
                     bg_fill_rgb=tuple(bg_raw) if bg_raw else (255, 255, 255),
                     bg_fill_pad=int(t.get("bg_fill_pad", 6) or 6),
+                    bbox_mask=bm,
                 )
             )
 

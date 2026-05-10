@@ -28,6 +28,7 @@ from ..utils.secrets import get_anthropic_key
 from .dialogs import TranslationEditDialog
 from .explorer import ExplorerPanel
 from .language_dialog import LanguageDialog
+from .mask_editor import MaskEditorDialog
 from .save_all_dialog import SaveAllProgressDialog
 from .settings_dialog import ApiKeyDialog
 from .side_panel import SidePanel
@@ -104,6 +105,7 @@ class MainWindow(QMainWindow):
         self.translate_tab.text_offset_changed.connect(self._on_text_offset_changed)
         self.translate_tab.render_requested.connect(self._on_render)
         self.translate_tab.add_text_requested.connect(self._on_add_translation_text)
+        self.translate_tab.mask_edit_requested.connect(self._on_edit_bbox_mask)
 
     def _build_explorer(self) -> None:
         self.explorer = ExplorerPanel()
@@ -699,6 +701,58 @@ class MainWindow(QMainWindow):
         if self.ctx.translations:
             msg += tr("status.bbox_deleted_render_hint")
         self.status_bar.showMessage(msg, 6000)
+
+    def _on_edit_bbox_mask(self, idx: int) -> None:
+        """Open the per-bbox mask editor and write the result back.
+
+        The crop is taken from the cleaned image when present (so the user
+        sees what's already been inpainted) and otherwise from the source.
+        Cancelling leaves the existing mask untouched; clicking Reset
+        removes the per-bbox mask so Step 5 falls back to the rectangle.
+        """
+        if self.ctx is None or idx < 0 or idx >= len(self.ctx.translations):
+            return
+        tr_item = self.ctx.translations[idx]
+        bbox = tr_item.bbox
+
+        base_img = (
+            self.ctx.source if self.ctx.cleaned is None else self.ctx.cleaned
+        )
+        if base_img is None:
+            QMessageBox.information(
+                self, tr("dialog.no_image_title"), tr("dialog.no_image_body")
+            )
+            return
+        h, w = base_img.shape[:2]
+        x0, y0 = max(0, bbox.x), max(0, bbox.y)
+        x1, y1 = min(w, bbox.x + bbox.w), min(h, bbox.y + bbox.h)
+        if x1 <= x0 or y1 <= y0:
+            return
+        crop = base_img[y0:y1, x0:x1].copy()
+
+        # Pre-fill the editor with whichever of these is most useful:
+        # 1) the existing per-bbox mask if any
+        # 2) otherwise the global text mask cropped to this bbox (if Step 1
+        #    detected something inside the bbox), so the user starts with
+        #    "what the auto-detector thought" and tweaks from there.
+        initial = None
+        if tr_item.bbox_mask is not None and tr_item.bbox_mask.shape[:2] == (
+            bbox.h, bbox.w,
+        ):
+            initial = tr_item.bbox_mask
+        elif self.ctx.mask is not None and self.ctx.mask.shape[:2] == (h, w):
+            initial = self.ctx.mask[y0:y1, x0:x1].copy()
+
+        dlg = MaskEditorDialog(crop_rgb=crop, initial_mask=initial, parent=self)
+        if dlg.exec():
+            tr_item.bbox_mask = dlg.result_mask
+            # cleaned/final become stale.
+            self.ctx.cleaned = None
+            self.ctx.final = None
+            self._refresh_tabs(self.ctx)
+            self._auto_save_metadata()
+            # Rebuild final immediately so the user sees the new inpaint.
+            self._launch_thread(step=5)
 
     def _on_add_translation_text(self) -> None:
         """Insert a fresh user-authored text bubble into the page.
