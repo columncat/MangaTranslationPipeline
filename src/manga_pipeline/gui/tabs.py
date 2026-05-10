@@ -191,6 +191,10 @@ class TranslateTab(PhaseTabWidget):
     # signal instead of translation_edit_requested so the main window
     # can open the mask editor on the bbox crop.
     mask_edit_requested = Signal(int)
+    # BBox edit mode (mirror of DetectTab): when on, drag/resize
+    # changes the bbox geometry. Re-uses DetectTab's signal so the
+    # main window only needs one handler.
+    bbox_geometry_changed = Signal(int, int, int, int, int)
 
     def __init__(self, parent=None):
         super().__init__(phase="translate", title=tr("tabs.title.translate"), parent=parent)
@@ -234,6 +238,15 @@ class TranslateTab(PhaseTabWidget):
         self.mask_edit_button.toggled.connect(self._on_toggle_mask_edit)
         self._toolbar_layout.insertWidget(6, self.mask_edit_button)
 
+        # BBox-edit toggle: switches the overlay items from click-only
+        # to drag/resize, same as DetectTab's Edit button.
+        self._bbox_edit_mode = False
+        self.bbox_edit_button = QPushButton(tr("tabs.translate.bbox_edit"))
+        self.bbox_edit_button.setCheckable(True)
+        self.bbox_edit_button.setToolTip(tr("tabs.translate.bbox_edit_tip"))
+        self.bbox_edit_button.toggled.connect(self._on_toggle_bbox_edit)
+        self._toolbar_layout.insertWidget(7, self.bbox_edit_button)
+
         self._default_font_path: Optional[str] = None
         self._default_font_pt: int = 36
 
@@ -257,6 +270,18 @@ class TranslateTab(PhaseTabWidget):
         # Mask editing happens in a modal dialog so we don't need to
         # change the view drag mode. The double-click router takes care
         # of the rest. Repaint so any visual hint can update.
+        if self._ctx:
+            self.update_from_context(self._ctx)
+
+    def _on_toggle_bbox_edit(self, checked: bool) -> None:
+        self._bbox_edit_mode = checked
+        # In bbox-edit mode, left-button drag must move/resize boxes,
+        # so disable pan (mirrors DetectTab._on_toggle_edit).
+        self.view.setDragMode(
+            QGraphicsView.DragMode.NoDrag
+            if checked
+            else QGraphicsView.DragMode.ScrollHandDrag
+        )
         if self._ctx:
             self.update_from_context(self._ctx)
 
@@ -340,9 +365,16 @@ class TranslateTab(PhaseTabWidget):
             self._add_label(r.bbox, r.text_ja)
 
     def _draw_translation_overlays(self, ctx: PageContext) -> None:
-        # In mask-edit mode the overlay turns purple to make the changed
-        # double-click target visible at a glance.
-        if self._mask_edit_mode:
+        # Tint the overlay differently per active mode so the user can
+        # tell at a glance what double-click / drag will do:
+        #   bbox_edit  → red  (matches DetectTab visual)
+        #   mask_edit  → purple
+        #   default    → green
+        if self._bbox_edit_mode:
+            pen = QPen(QColor(255, 64, 64))
+            brush = QBrush(QColor(255, 64, 64, 30))
+            dbl_target = self.translation_edit_requested.emit
+        elif self._mask_edit_mode:
             pen = QPen(QColor(160, 80, 200))
             brush = QBrush(QColor(160, 80, 200, 60))
             dbl_target = self.mask_edit_requested.emit
@@ -352,12 +384,34 @@ class TranslateTab(PhaseTabWidget):
             dbl_target = self.translation_edit_requested.emit
         pen.setWidth(2)
         for i, tr_item in enumerate(ctx.translations):
-            rect = ClickableRectItem(
-                QRectF(tr_item.bbox.x, tr_item.bbox.y, tr_item.bbox.w, tr_item.bbox.h),
-                idx=i,
-                on_right_click=self.bbox_delete_requested.emit,
-                on_double_click=dbl_target,
-            )
+            if self._bbox_edit_mode:
+                # EditableBBoxItem owns the corner-handle drag/resize
+                # interaction and emits geometry_changed when the user
+                # releases the mouse.
+                rect = EditableBBoxItem(
+                    QRectF(
+                        tr_item.bbox.x,
+                        tr_item.bbox.y,
+                        tr_item.bbox.w,
+                        tr_item.bbox.h,
+                    ),
+                    idx=i,
+                    on_right_click=self.bbox_delete_requested.emit,
+                    on_geometry_changed=self.bbox_geometry_changed.emit,
+                    edit_enabled=True,
+                )
+            else:
+                rect = ClickableRectItem(
+                    QRectF(
+                        tr_item.bbox.x,
+                        tr_item.bbox.y,
+                        tr_item.bbox.w,
+                        tr_item.bbox.h,
+                    ),
+                    idx=i,
+                    on_right_click=self.bbox_delete_requested.emit,
+                    on_double_click=dbl_target,
+                )
             rect.setPen(pen)
             rect.setBrush(brush)
             self.view.add_overlay_item(rect)

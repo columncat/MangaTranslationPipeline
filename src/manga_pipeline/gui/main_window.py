@@ -112,6 +112,7 @@ class MainWindow(QMainWindow):
         self.detect_tab.bbox_geometry_changed.connect(self._on_bbox_geometry_changed)
         self.detect_tab.bbox_add_requested.connect(self._on_bbox_add)
         self.translate_tab.bbox_delete_requested.connect(self._on_bbox_delete)
+        self.translate_tab.bbox_geometry_changed.connect(self._on_bbox_geometry_changed)
         self.translate_tab.translation_edit_requested.connect(self._on_translation_edit)
         self.translate_tab.text_offset_changed.connect(self._on_text_offset_changed)
         self.translate_tab.render_requested.connect(self._on_render)
@@ -734,8 +735,14 @@ class MainWindow(QMainWindow):
         old = self.ctx.bboxes[idx]
         old.x, old.y, old.w, old.h = int(x), int(y), int(w), int(h)
         old.area = int(w) * int(h)
+        # The bbox object is shared with TranslationResult.bbox, so the
+        # data is already in sync — but the Translate-tab QGraphicsScene
+        # still holds the old overlay rect. Force a refresh so switching
+        # tabs (or simply repainting after the user releases the drag)
+        # shows the new geometry instead of the stale one.
         self.ctx.cleaned = None
         self.ctx.final = None
+        self._refresh_tabs(self.ctx)
         self.status_bar.showMessage(
             tr("status.bbox_changed", idx=idx, x=x, y=y, w=w, h=h),
             5000,
@@ -998,12 +1005,7 @@ class MainWindow(QMainWindow):
             self._restoring_history = False
         if entry is None:
             return
-        self._refresh_tabs(self.ctx)
-        self._refresh_history_ui()
-        self._auto_save_metadata()
-        self.status_bar.showMessage(
-            tr("status.undo", label=entry.label), 4000
-        )
+        self._post_history_apply(tr("status.undo", label=entry.label))
 
     def _on_redo(self) -> None:
         if self.ctx is None or not self.history.can_redo():
@@ -1015,18 +1017,37 @@ class MainWindow(QMainWindow):
             self._restoring_history = False
         if entry is None:
             return
+        self._post_history_apply(tr("status.redo", label=entry.label))
+
+    def _post_history_apply(self, status_msg: str) -> None:
+        """Common tail for undo/redo/jump: refresh UI, save, re-render.
+
+        Re-rendering is conditional on having translations to render —
+        otherwise Step 5 would just error out. The launch is silent and
+        non-blocking so the user immediately sees the bbox-level state
+        change, with the final image catching up shortly after.
+        """
         self._refresh_tabs(self.ctx)
         self._refresh_history_ui()
         self._auto_save_metadata()
-        self.status_bar.showMessage(
-            tr("status.redo", label=entry.label), 4000
-        )
+        self.status_bar.showMessage(status_msg, 4000)
+        # Re-render so the visible Translate-tab final image matches
+        # the restored translation/bbox state instead of waiting for
+        # the user to press Render manually. Skipped when there's
+        # nothing to render or while the worker is busy.
+        if (
+            self.ctx is not None
+            and self.ctx.translations
+            and not self._queue_active
+            and (self._thread is None or not self._thread.isRunning())
+        ):
+            self._launch_thread(step=5)
 
     def _on_history_jump(self, target_idx: int) -> None:
         """Step through undo / redo until the dock-clicked entry is current.
 
-        Bounded by ``HistoryManager.entries()``; ignored when the doc
-        is empty or while a queue is running.
+        Bounded by the union of undo + redo stacks; ignored when the
+        doc is empty or while a queue is running.
         """
         if self.ctx is None or self._queue_active:
             return
@@ -1047,9 +1068,11 @@ class MainWindow(QMainWindow):
                     self.history.redo(self.ctx)
         finally:
             self._restoring_history = False
-        self._refresh_tabs(self.ctx)
-        self._refresh_history_ui()
-        self._auto_save_metadata()
+        direction = (
+            tr("status.redo", label="…") if steps > 0
+            else tr("status.undo", label="…")
+        )
+        self._post_history_apply(direction)
 
     # ----------------------------------------------------------------- refresh
 

@@ -75,7 +75,13 @@ class HistoryDock(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
-        """Repopulate the list from the current manager state."""
+        """Repopulate the list from the current manager state.
+
+        Layout: [oldest undo … current state (highlighted) …
+                 redo entries shown dimmed]. Double-clicking a dimmed
+        row triggers redo to step forward; double-clicking an undo row
+        steps backward.
+        """
         self.list.clear()
         if self._manager is None:
             self.undo_btn.setEnabled(False)
@@ -84,23 +90,37 @@ class HistoryDock(QWidget):
 
         entries = self._manager.entries()
         current = self._manager.current_index
+        redo_entries = self._manager.redo_entries()
+
         bold = QFont()
         bold.setBold(True)
+        dim_color = QBrush(QColor("#a0a0a0"))
+
+        # Undo timeline (current is the last). Each row's UserRole
+        # carries its target manager-index for click-to-jump.
         for i, e in enumerate(entries):
             label = e.label
             ts = self._format_timestamp(e.timestamp)
             item = QListWidgetItem(f"{label}    [{ts}]")
+            item.setData(Qt.ItemDataRole.UserRole, i)
             if i == current:
                 item.setFont(bold)
                 item.setBackground(QBrush(QColor(80, 200, 80, 60)))
-            else:
-                # Entries past the current index represent redo'able
-                # future states (none in this layout because we render
-                # only the undo stack); future-proofing for when we
-                # decide to interleave redo entries with a separator.
-                pass
             self.list.addItem(item)
-        # Keep the current row visible.
+
+        # Redo "future" entries — dimmed so it's clear they're not the
+        # current state. Their indices continue past the undo timeline
+        # so jump_requested(target) can advance via redo.
+        for j, e in enumerate(redo_entries, start=1):
+            label = e.label
+            ts = self._format_timestamp(e.timestamp)
+            item = QListWidgetItem(f"{label}    [{ts}]")
+            item.setForeground(dim_color)
+            # target index = (current + j) — that's where jumping
+            # forward j steps would land in a hypothetical merged list.
+            item.setData(Qt.ItemDataRole.UserRole, current + j)
+            self.list.addItem(item)
+
         if 0 <= current < self.list.count():
             self.list.setCurrentRow(current)
             self.list.scrollToItem(self.list.item(current))
@@ -116,6 +136,7 @@ class HistoryDock(QWidget):
         return _time.strftime("%H:%M:%S", _time.localtime(ts))
 
     def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
-        row = self.list.row(item)
-        if row >= 0:
-            self.jump_requested.emit(row)
+        target = item.data(Qt.ItemDataRole.UserRole)
+        if target is None:
+            return
+        self.jump_requested.emit(int(target))

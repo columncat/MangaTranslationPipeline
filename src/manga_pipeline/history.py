@@ -141,6 +141,12 @@ class HistoryManager:
         """All snapshots oldest → newest. The current state is the last one."""
         return list(self._undo)
 
+    def redo_entries(self) -> list[HistoryEntry]:
+        """Snapshots reachable via redo (most-recent-first internally,
+        flipped here so the dock shows them in chronological order
+        appended to the undo timeline)."""
+        return list(reversed(self._redo))
+
     # ---- undo / redo ----
 
     def undo(self, ctx: "PageContext") -> Optional[HistoryEntry]:
