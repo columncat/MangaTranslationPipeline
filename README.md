@@ -6,7 +6,7 @@
 ---
 
 ## 시연 영상 / Demo
-
+**섬네일을 클릭하여 유튜브로 이동**
 [![Demo](https://img.youtube.com/vi/xNEkKBk1e8A/maxresdefault.jpg)](https://youtu.be/xNEkKBk1e8A)
 > 시연 영상 속 만화 페이지는 *Manga109-s* 데이터셋의 작품을 사용했습니다.  
 > Manga pages shown in the demo are **Courtesy of NAOKO ETO, Manga109-s**.
