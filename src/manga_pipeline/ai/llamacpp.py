@@ -57,12 +57,12 @@ class LlamaCppTranslator:
             verbose=False,
             chat_format=self._chat_format(),
         )
+        self._max_tokens = cfg.max_tokens
 
     @staticmethod
     def _chat_format() -> Optional[str]:
         # ``None`` → llama.cpp infers from the GGUF tokenizer.chat_template.
         return None
-        self._max_tokens = cfg.max_tokens
 
     def translate_batch(
         self,
