@@ -37,6 +37,10 @@ class TranslationResult:
     bbox: BBox
     text_ja: str
     text_ko: str
+    # Optional per-bbox inpainting mask in bbox-local coordinates
+    # (shape == (bbox.h, bbox.w), uint8, 0 = keep original, 255 = inpaint).
+    # When None, Step 5 falls back to using the full bbox rectangle.
+    bbox_mask: Optional["np.ndarray"] = field(default=None, repr=False)
     # Default True: text is centered on the bbox center at a fixed font size
     # and only breaks on user-inserted (or Claude-inserted) "\n" characters.
     # Toggle off in the Edit Translation dialog to fall back to bbox-fit.
@@ -55,6 +59,17 @@ class TranslationResult:
     # Counter-clockwise rotation in degrees applied to the rendered text
     # block around the bbox center (after ``text_offset``).
     text_rotation: int = 0
+    # Per-dialogue colour overrides. ``None`` falls back to Step5Params
+    # defaults (black fill, white stroke). Stored as RGB triples.
+    fill_rgb: Optional[tuple[int, int, int]] = None
+    stroke_rgb: Optional[tuple[int, int, int]] = None
+    # Optional ellipse drawn behind the rendered text block as a backdrop
+    # (for white text on busy art). Disabled by default.
+    bg_fill_enabled: bool = False
+    bg_fill_rgb: tuple[int, int, int] = (255, 255, 255)
+    # Padding (px) added around the text bounding box before fitting the
+    # ellipse to it. Larger values produce a roomier oval.
+    bg_fill_pad: int = 6
 
 
 @dataclass

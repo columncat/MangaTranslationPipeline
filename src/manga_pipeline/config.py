@@ -26,11 +26,26 @@ class Step2Params(BaseModel):
 
 
 class Step4Params(BaseModel):
+    """Translation step parameters.
+
+    From v1.1 the user can pick the AI backend via ``provider`` and the
+    GUI surfaces backend-specific fields (``base_url``, ``model_path``)
+    accordingly. ``model`` is reused across providers but its meaning
+    differs (a Claude model name, an OpenAI-compatible model id, an
+    Ollama tag, or ignored for llama.cpp which uses ``model_path``).
+    """
+
+    provider: str = "anthropic"  # see manga_pipeline.ai.AIProvider
     model: str = "claude-sonnet-4-6"
     glossary: str = ""
     style_notes: str = "natural Korean manga dialogue, preserve tone and honorifics"
     max_tokens: int = 4096
     skip_translation: bool = False
+    # Provider-specific options (ignored when not relevant):
+    base_url: Optional[str] = None       # openai-compat, ollama
+    model_path: Optional[str] = None     # llama.cpp GGUF path
+    n_ctx: int = 8192                    # llama.cpp context window
+    n_gpu_layers: int = -1               # llama.cpp GPU offload (-1 = all)
 
 
 class Step5Params(BaseModel):

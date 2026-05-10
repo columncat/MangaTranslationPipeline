@@ -38,12 +38,6 @@ class SidePanel(QWidget):
     api_key_clicked = Signal()
     config_changed = Signal()
 
-    AVAILABLE_MODELS = [
-        "claude-sonnet-4-6",
-        "claude-opus-4-7",
-        "claude-haiku-4-5-20251001",
-    ]
-
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
         self.config = config
@@ -181,6 +175,34 @@ class SidePanel(QWidget):
         return g
 
     def _build_step4_group(self) -> QGroupBox:
+        from ..ai import AIProvider, PROVIDERS
+
+        # Reasonable model presets per provider — the user can still type
+        # any model name into the editable combo box.
+        self._provider_default_models = {
+            AIProvider.ANTHROPIC: [
+                "claude-sonnet-4-6",
+                "claude-opus-4-7",
+                "claude-haiku-4-5-20251001",
+            ],
+            AIProvider.OPENAI_COMPAT: [
+                "gpt-4o-mini",
+                "gpt-4o",
+            ],
+            AIProvider.GEMINI: [
+                "gemini-2.0-flash",
+                "gemini-2.5-pro",
+            ],
+            AIProvider.OLLAMA: [
+                "qwen3:8b",
+                "qwen3:14b",
+                "llama3.1:8b",
+            ],
+            AIProvider.LLAMACPP: [],  # uses model_path instead
+            AIProvider.EMBEDDED: [],  # auto-managed Gemma 4 E4B GGUF
+        }
+        self._all_providers = list(PROVIDERS)
+
         g = QGroupBox(tr("side.step4"))
         v = QVBoxLayout(g)
 
@@ -190,12 +212,42 @@ class SidePanel(QWidget):
         v.addWidget(self.s4_skip)
 
         f = QFormLayout()
+
+        # Provider picker
+        self.s4_provider = QComboBox()
+        for p in self._all_providers:
+            self.s4_provider.addItem(tr(f"side.s4.provider.{p}"), p)
+        cur_provider = self.config.step4.provider or AIProvider.ANTHROPIC
+        idx = self.s4_provider.findData(cur_provider)
+        self.s4_provider.setCurrentIndex(idx if idx >= 0 else 0)
+        self.s4_provider.currentIndexChanged.connect(self._on_provider_changed)
+        f.addRow(tr("side.s4.provider"), self.s4_provider)
+
         self.s4_model = QComboBox()
-        self.s4_model.addItems(self.AVAILABLE_MODELS)
-        idx = self.s4_model.findText(self.config.step4.model)
-        self.s4_model.setCurrentIndex(idx if idx >= 0 else 0)
-        self.s4_model.currentTextChanged.connect(self._sync)
+        self.s4_model.setEditable(True)
+        self.s4_model.editTextChanged.connect(self._sync)
         f.addRow(tr("side.s4.model"), self.s4_model)
+
+        # Backend-specific fields. Always present in the layout but hidden
+        # when irrelevant so the user only sees what matters.
+        self.s4_base_url = QLineEdit(self.config.step4.base_url or "")
+        self.s4_base_url.setPlaceholderText("http://localhost:11434")
+        self.s4_base_url.editingFinished.connect(self._sync)
+        f.addRow(tr("side.s4.base_url"), self.s4_base_url)
+
+        self.s4_model_path = QLineEdit(self.config.step4.model_path or "")
+        self.s4_model_path.setPlaceholderText("/path/to/model.gguf")
+        self.s4_model_path.editingFinished.connect(self._sync)
+        model_path_row = QHBoxLayout()
+        model_path_row.addWidget(self.s4_model_path, 1)
+        browse_btn = QPushButton("…")
+        browse_btn.setMaximumWidth(28)
+        browse_btn.clicked.connect(self._pick_gguf)
+        model_path_row.addWidget(browse_btn)
+        model_path_wrap = QWidget()
+        model_path_wrap.setLayout(model_path_row)
+        f.addRow(tr("side.s4.model_path"), model_path_wrap)
+        self._s4_model_path_wrap = model_path_wrap
 
         self.s4_max_tokens = QSpinBox()
         self.s4_max_tokens.setRange(256, 16384)
@@ -207,6 +259,8 @@ class SidePanel(QWidget):
         self.s4_style.editingFinished.connect(self._sync)
         f.addRow(tr("side.s4.style"), self.s4_style)
         v.addLayout(f)
+        # Save references to the form rows so we can hide / show them.
+        self._s4_form = f
 
         v.addWidget(QLabel(tr("side.s4.glossary_label")))
         self.s4_glossary = QPlainTextEdit(self.config.step4.glossary)
@@ -221,7 +275,85 @@ class SidePanel(QWidget):
         btn.clicked.connect(self.api_key_clicked.emit)
         api_row.addWidget(btn)
         v.addLayout(api_row)
+
+        # Apply provider-conditional visibility now that all widgets exist.
+        self._on_provider_changed(self.s4_provider.currentIndex())
         return g
+
+    def _pick_gguf(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr("side.s4.pick_gguf"), "", "GGUF (*.gguf)"
+        )
+        if path:
+            self.s4_model_path.setText(path)
+            self._sync()
+
+    def _on_provider_changed(self, _idx: int) -> None:
+        """Refresh the model dropdown choices and hide irrelevant fields."""
+        from ..ai import AIProvider
+
+        provider = self.s4_provider.currentData() or AIProvider.ANTHROPIC
+
+        # Repopulate model presets, preserving any custom value the user
+        # may have typed for the previous provider.
+        prev_text = self.s4_model.currentText()
+        self.s4_model.blockSignals(True)
+        self.s4_model.clear()
+        for m in self._provider_default_models.get(provider, []):
+            self.s4_model.addItem(m)
+        # Try to keep the user's currently-saved model for this provider;
+        # fall back to the first preset.
+        if (
+            self.config.step4.provider == provider
+            and self.config.step4.model
+        ):
+            target = self.config.step4.model
+        elif prev_text and prev_text in self._provider_default_models.get(provider, []):
+            target = prev_text
+        elif self._provider_default_models.get(provider):
+            target = self._provider_default_models[provider][0]
+        else:
+            target = ""
+        i = self.s4_model.findText(target)
+        if i >= 0:
+            self.s4_model.setCurrentIndex(i)
+        elif target:
+            self.s4_model.setCurrentText(target)
+        self.s4_model.blockSignals(False)
+
+        # Field visibility per provider:
+        #   anthropic     → model only (api key handled by keyring)
+        #   openai-compat → model + base_url + api key
+        #   gemini        → model + api key
+        #   ollama        → model + base_url
+        #   llama.cpp     → model_path (model name field hidden)
+        wants_base_url = provider in (
+            AIProvider.OPENAI_COMPAT,
+            AIProvider.OLLAMA,
+        )
+        wants_model_path = provider == AIProvider.LLAMACPP
+        # Embedded auto-manages model path AND model name → hide both.
+        wants_model_name = provider not in (
+            AIProvider.LLAMACPP,
+            AIProvider.EMBEDDED,
+        )
+
+        self._set_form_row_visible(self.s4_model, wants_model_name)
+        self._set_form_row_visible(self.s4_base_url, wants_base_url)
+        self._set_form_row_visible(self._s4_model_path_wrap, wants_model_path)
+
+        # Skip the initial sync from Step 4's __init__ — Step 5 widgets
+        # don't exist yet. The final sync happens after all groups are
+        # built via the explicit refresh in __init__.
+        if hasattr(self, "s5_font_combo"):
+            self._sync()
+
+    def _set_form_row_visible(self, widget: QWidget, visible: bool) -> None:
+        """Hide both the field and its label in the QFormLayout."""
+        widget.setVisible(visible)
+        label = self._s4_form.labelForField(widget)
+        if label is not None:
+            label.setVisible(visible)
 
     def _build_step5_group(self) -> QGroupBox:
         g = QGroupBox(tr("side.step5"))
@@ -390,7 +522,10 @@ class SidePanel(QWidget):
         c.step2.iterations = int(self.s2_iter.value())
         c.step2.min_area = int(self.s2_min.value())
         c.step2.max_area_ratio = float(self.s2_max_ratio.value())
+        c.step4.provider = self.s4_provider.currentData() or "anthropic"
         c.step4.model = self.s4_model.currentText()
+        c.step4.base_url = self.s4_base_url.text().strip() or None
+        c.step4.model_path = self.s4_model_path.text().strip() or None
         c.step4.max_tokens = int(self.s4_max_tokens.value())
         c.step4.style_notes = self.s4_style.text()
         c.step4.glossary = self.s4_glossary.toPlainText()

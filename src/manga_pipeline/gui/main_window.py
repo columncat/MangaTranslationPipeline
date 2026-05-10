@@ -20,20 +20,26 @@ from PySide6.QtWidgets import (
 from .. import persistence
 from ..config import AppConfig
 from ..device import auto_device
+from ..history import HistoryManager
 from ..i18n import set_language, tr
-from ..models import BBox, PageContext
+from ..models import BBox, PageContext, TranslationResult
 from ..utils.fonts import find_default_font
 from ..utils.image_io import load_rgb, save_image
-from ..utils.secrets import get_anthropic_key
+from ..ai import AIProvider
+from ..utils.secrets import get_api_key
 from .dialogs import TranslationEditDialog
 from .explorer import ExplorerPanel
+from .embedded_download_dialog import EmbeddedDownloadDialog
+from .history_dock import HistoryDock
 from .language_dialog import LanguageDialog
+from .mask_editor import MaskEditorDialog
 from .save_all_dialog import SaveAllProgressDialog
 from .settings_dialog import ApiKeyDialog
 from .side_panel import SidePanel
 from .tabs import DetectTab, SourceTab, TranslateTab
 from .workers import (
     PHASE_DETECT,
+    PHASE_RENDER,
     PHASE_TRANSLATE,
     PipelineThread,
     PipelineWorker,
@@ -57,6 +63,13 @@ class MainWindow(QMainWindow):
         self._source_path: Optional[Path] = None
         self.worker = PipelineWorker()
         self._thread: Optional[QThread] = None
+        # Per-image undo / redo. Reset in _load_image_path so each image
+        # gets a fresh timeline rooted at its persisted state.
+        self.history = HistoryManager()
+        # Set to True while history.undo / .redo is restoring state, so
+        # the various editing handlers (which would otherwise try to
+        # record a fresh entry on every model change) skip recording.
+        self._restoring_history = False
         # While True, _load_image_path skips its auto-save step. Queue runs
         # set this so the worker's per-step save_fn writes are not clobbered
         # by the main window auto-saving stale ``self.ctx`` snapshots when
@@ -70,11 +83,12 @@ class MainWindow(QMainWindow):
         self._build_tabs()
         self._build_explorer()
         self._build_side_panel()
+        self._build_history_dock()
         self._build_toolbar()
         self._build_status_bar()
         self._wire_signals()
 
-        self.side_panel.set_api_key_status(get_anthropic_key() is not None)
+        self.side_panel.set_api_key_status(self._current_api_key_present())
         self._push_render_defaults()
         self.status_bar.showMessage(
             tr("status.device_ready", device=auto_device())
@@ -99,9 +113,12 @@ class MainWindow(QMainWindow):
         self.detect_tab.bbox_geometry_changed.connect(self._on_bbox_geometry_changed)
         self.detect_tab.bbox_add_requested.connect(self._on_bbox_add)
         self.translate_tab.bbox_delete_requested.connect(self._on_bbox_delete)
+        self.translate_tab.bbox_geometry_changed.connect(self._on_bbox_geometry_changed)
         self.translate_tab.translation_edit_requested.connect(self._on_translation_edit)
         self.translate_tab.text_offset_changed.connect(self._on_text_offset_changed)
         self.translate_tab.render_requested.connect(self._on_render)
+        self.translate_tab.add_text_requested.connect(self._on_add_translation_text)
+        self.translate_tab.mask_edit_requested.connect(self._on_edit_bbox_mask)
 
     def _build_explorer(self) -> None:
         self.explorer = ExplorerPanel()
@@ -133,6 +150,31 @@ class MainWindow(QMainWindow):
         self.side_panel.api_key_clicked.connect(self._on_set_api_key)
         self.side_panel.config_changed.connect(self._save_config)
         self.side_panel.config_changed.connect(self._push_render_defaults)
+        # Re-evaluate API-key status whenever the user switches backends.
+        self.side_panel.config_changed.connect(
+            lambda: self.side_panel.set_api_key_status(
+                self._current_api_key_present()
+            )
+        )
+
+    def _build_history_dock(self) -> None:
+        self.history_dock = HistoryDock()
+        self.history_dock.set_manager(self.history)
+        dock = QDockWidget(tr("history.title"), self)
+        dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        dock.setWidget(self.history_dock)
+        # Tab the history dock with the settings dock on the right side
+        # so users can flip between them without losing screen real estate.
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        # Keep a reference so we can find/raise the dock if the user
+        # closes it inadvertently.
+        self._history_dock_widget = dock
+
+        self.history_dock.undo_requested.connect(self._on_undo)
+        self.history_dock.redo_requested.connect(self._on_redo)
+        self.history_dock.jump_requested.connect(self._on_history_jump)
 
     def _build_toolbar(self) -> None:
         tb = QToolBar("Main", self)
@@ -148,6 +190,24 @@ class MainWindow(QMainWindow):
         save_act.setShortcut(QKeySequence.StandardKey.Save)
         save_act.triggered.connect(self._on_save)
         tb.addAction(save_act)
+
+        tb.addSeparator()
+
+        # Undo / Redo. Save references on the window so we can
+        # enable / disable them whenever the history changes.
+        self.undo_act = QAction(tr("toolbar.undo"), self)
+        self.undo_act.setShortcut(QKeySequence.StandardKey.Undo)  # Ctrl+Z
+        self.undo_act.triggered.connect(self._on_undo)
+        self.undo_act.setEnabled(False)
+        tb.addAction(self.undo_act)
+
+        self.redo_act = QAction(tr("toolbar.redo"), self)
+        # Ctrl+Y for the Windows-style redo, plus Ctrl+Shift+Z as a
+        # secondary so muscle-memory from Photoshop / Linux apps works too.
+        self.redo_act.setShortcuts([QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z")])
+        self.redo_act.triggered.connect(self._on_redo)
+        self.redo_act.setEnabled(False)
+        tb.addAction(self.redo_act)
 
         tb.addSeparator()
 
@@ -240,6 +300,9 @@ class MainWindow(QMainWindow):
         self.ctx = ctx
         self._source_path = path
         self._refresh_tabs(ctx)
+        # Seed a fresh undo history rooted at the persisted state.
+        self.history.reset(ctx, label=tr("history.label.loaded", name=path.name))
+        self._refresh_history_ui()
 
         if ctx.final is not None or ctx.translations:
             target = 2
@@ -328,10 +391,63 @@ class MainWindow(QMainWindow):
             return None
         return self._source_path.parent / "translated" / self._source_path.name
 
+    # ---- per-provider API-key plumbing ----
+
+    # Backends that need an API key managed by the keyring.
+    _KEYED_PROVIDERS = (
+        AIProvider.ANTHROPIC,
+        AIProvider.OPENAI_COMPAT,
+        AIProvider.GEMINI,
+    )
+
+    def _current_provider(self) -> str:
+        return getattr(self.config.step4, "provider", AIProvider.ANTHROPIC)
+
+    def _current_api_key_present(self) -> bool:
+        provider = self._current_provider()
+        if provider not in self._KEYED_PROVIDERS:
+            # Local backends don't use a key — treat as "always present"
+            # so the side panel doesn't flag a false missing-key warning.
+            return True
+        return get_api_key(provider) is not None
+
+    def _ensure_embedded_weights(self) -> bool:
+        """Make sure the embedded LLM GGUF is on disk before Translate.
+
+        If the user has the ``embedded`` provider selected and the
+        weights are missing, pop up a download dialog and block until
+        it finishes. Returns True if it's safe to proceed (either we
+        don't need the embedded weights or the download succeeded),
+        False if the user cancelled or the download failed.
+        """
+        if self._current_provider() != AIProvider.EMBEDDED:
+            return True
+        if self.config.step4.skip_translation:
+            # Skip-translate path doesn't talk to the LLM at all.
+            return True
+        from ..ml.weights import embedded_llm_weights_present
+
+        if embedded_llm_weights_present():
+            return True
+        dlg = EmbeddedDownloadDialog(parent=self)
+        dlg.start()
+        dlg.exec()
+        return bool(dlg.success)
+
     def _on_set_api_key(self) -> None:
-        dlg = ApiKeyDialog(self)
+        provider = self._current_provider()
+        # If the user has picked a local backend, opening the dialog
+        # would make no sense — surface a short hint instead.
+        if provider not in self._KEYED_PROVIDERS:
+            QMessageBox.information(
+                self,
+                tr("apikey.title"),
+                tr("apikey.local_backend_no_key"),
+            )
+            return
+        dlg = ApiKeyDialog(provider=provider, parent=self)
         if dlg.exec():
-            self.side_panel.set_api_key_status(get_anthropic_key() is not None)
+            self.side_panel.set_api_key_status(self._current_api_key_present())
 
     def _on_change_language(self) -> None:
         dlg = LanguageDialog(current=self.config.ui_language, parent=self)
@@ -358,10 +474,19 @@ class MainWindow(QMainWindow):
                 self, tr("dialog.no_image_title"), tr("dialog.no_image_body")
             )
             return
-        if phase == PHASE_TRANSLATE and not get_anthropic_key():
+        if phase == PHASE_TRANSLATE and not self._current_api_key_present():
             self._on_set_api_key()
-            if not get_anthropic_key():
+            if not self._current_api_key_present():
                 return
+        if phase == PHASE_TRANSLATE and not self._ensure_embedded_weights():
+            return
+        # Jump to the destination tab as soon as the user clicks, so
+        # progress / partial OCR overlays show up where they expect
+        # to see the result, instead of waiting for phase_finished.
+        if phase == PHASE_DETECT:
+            self.tabs.setCurrentIndex(1)
+        elif phase == PHASE_TRANSLATE:
+            self.tabs.setCurrentIndex(2)
         self._launch_thread(phase=phase)
 
     def _on_run_all(self) -> None:
@@ -370,10 +495,16 @@ class MainWindow(QMainWindow):
                 self, tr("dialog.no_image_title"), tr("dialog.no_image_body")
             )
             return
-        if not get_anthropic_key():
+        if not self._current_api_key_present():
             self._on_set_api_key()
-            if not get_anthropic_key():
+            if not self._current_api_key_present():
                 return
+        if not self._ensure_embedded_weights():
+            return
+        # Run All ends in Translate; show the Detect tab first so the
+        # user watches detection happen, then phase_finished switches
+        # to Translate when the second phase begins.
+        self.tabs.setCurrentIndex(1)
         self._launch_thread(all_phases=True)
 
     def _on_render(self) -> None:
@@ -389,6 +520,8 @@ class MainWindow(QMainWindow):
                 tr("dialog.nothing_to_render_body"),
             )
             return
+        # Re-render lands on the Translate tab where the final image lives.
+        self.tabs.setCurrentIndex(2)
         self._launch_thread(step=5)
 
     def _on_queue_process(self, paths: list, phases_label: str) -> None:
@@ -398,10 +531,12 @@ class MainWindow(QMainWindow):
             phases_label in ("translate", "all")
             and not self.config.step4.skip_translation
         )
-        if needs_translate and not get_anthropic_key():
+        if needs_translate and not self._current_api_key_present():
             self._on_set_api_key()
-            if not get_anthropic_key():
+            if not self._current_api_key_present():
                 return
+        if needs_translate and not self._ensure_embedded_weights():
+            return
 
         if self.ctx is not None and self._source_path is not None:
             try:
@@ -417,6 +552,9 @@ class MainWindow(QMainWindow):
             self._queue_target_tab = 1
         elif phases_label == "translate":
             phases = (PHASE_TRANSLATE,)
+            self._queue_target_tab = 2
+        elif phases_label == "render":
+            phases = (PHASE_RENDER,)
             self._queue_target_tab = 2
         else:
             phases = (PHASE_DETECT, PHASE_TRANSLATE)
@@ -562,6 +700,18 @@ class MainWindow(QMainWindow):
                 persistence.save_context(self.ctx, self._source_path)
             except Exception:  # noqa: BLE001
                 pass
+        # Single-image phase runs become history entries so undo can roll
+        # back past a Detect / Translate / Render execution. Skip while a
+        # queue is running because each queued item triggers its own
+        # phase_finished events that are not relevant to the active doc.
+        if ok and not self._queue_active and self.ctx is not None:
+            label_key = {
+                PHASE_DETECT: "history.label.detect",
+                PHASE_TRANSLATE: "history.label.translate",
+                PHASE_RENDER: "history.label.render",
+            }.get(phase)
+            if label_key:
+                self._record_history(tr(label_key))
 
     # ---- queue ----
 
@@ -628,12 +778,19 @@ class MainWindow(QMainWindow):
         old = self.ctx.bboxes[idx]
         old.x, old.y, old.w, old.h = int(x), int(y), int(w), int(h)
         old.area = int(w) * int(h)
+        # The bbox object is shared with TranslationResult.bbox, so the
+        # data is already in sync — but the Translate-tab QGraphicsScene
+        # still holds the old overlay rect. Force a refresh so switching
+        # tabs (or simply repainting after the user releases the drag)
+        # shows the new geometry instead of the stale one.
         self.ctx.cleaned = None
         self.ctx.final = None
+        self._refresh_tabs(self.ctx)
         self.status_bar.showMessage(
             tr("status.bbox_changed", idx=idx, x=x, y=y, w=w, h=h),
             5000,
         )
+        self._record_history(tr("history.label.bbox_moved", idx=idx))
         self._auto_save_metadata()
 
     def _on_bbox_add(self) -> None:
@@ -654,6 +811,7 @@ class MainWindow(QMainWindow):
             tr("status.bbox_added", x=x, y=y, w=bw, h=bh),
             6000,
         )
+        self._record_history(tr("history.label.bbox_added"))
         self._auto_save_metadata()
 
     def _on_text_offset_changed(self, idx: int, ox: int, oy: int) -> None:
@@ -667,6 +825,7 @@ class MainWindow(QMainWindow):
             tr("status.translation_offset", idx=idx, ox=ox, oy=oy),
             5000,
         )
+        self._record_history(tr("history.label.text_moved", idx=idx))
         self._auto_save_metadata()
 
     def _auto_save_metadata(self) -> None:
@@ -694,6 +853,109 @@ class MainWindow(QMainWindow):
         if self.ctx.translations:
             msg += tr("status.bbox_deleted_render_hint")
         self.status_bar.showMessage(msg, 6000)
+        self._record_history(tr("history.label.bbox_deleted", idx=idx))
+        self._auto_save_metadata()
+
+    def _on_edit_bbox_mask(self, idx: int) -> None:
+        """Open the per-bbox mask editor and write the result back.
+
+        The crop is taken from the cleaned image when present (so the user
+        sees what's already been inpainted) and otherwise from the source.
+        Cancelling leaves the existing mask untouched; clicking Reset
+        removes the per-bbox mask so Step 5 falls back to the rectangle.
+        """
+        if self.ctx is None or idx < 0 or idx >= len(self.ctx.translations):
+            return
+        tr_item = self.ctx.translations[idx]
+        bbox = tr_item.bbox
+
+        base_img = (
+            self.ctx.source if self.ctx.cleaned is None else self.ctx.cleaned
+        )
+        if base_img is None:
+            QMessageBox.information(
+                self, tr("dialog.no_image_title"), tr("dialog.no_image_body")
+            )
+            return
+        h, w = base_img.shape[:2]
+        x0, y0 = max(0, bbox.x), max(0, bbox.y)
+        x1, y1 = min(w, bbox.x + bbox.w), min(h, bbox.y + bbox.h)
+        if x1 <= x0 or y1 <= y0:
+            return
+        crop = base_img[y0:y1, x0:x1].copy()
+
+        # Pre-fill the editor with whichever of these is most useful:
+        # 1) the existing per-bbox mask if any
+        # 2) otherwise the global text mask cropped to this bbox (if Step 1
+        #    detected something inside the bbox), so the user starts with
+        #    "what the auto-detector thought" and tweaks from there.
+        initial = None
+        if tr_item.bbox_mask is not None and tr_item.bbox_mask.shape[:2] == (
+            bbox.h, bbox.w,
+        ):
+            initial = tr_item.bbox_mask
+        elif self.ctx.mask is not None and self.ctx.mask.shape[:2] == (h, w):
+            initial = self.ctx.mask[y0:y1, x0:x1].copy()
+
+        dlg = MaskEditorDialog(crop_rgb=crop, initial_mask=initial, parent=self)
+        if dlg.exec():
+            tr_item.bbox_mask = dlg.result_mask
+            # cleaned/final become stale.
+            self.ctx.cleaned = None
+            self.ctx.final = None
+            self._refresh_tabs(self.ctx)
+            self._record_history(tr("history.label.mask_edited", idx=idx))
+            self._auto_save_metadata()
+            # Rebuild final immediately so the user sees the new inpaint.
+            self._launch_thread(step=5)
+
+    def _on_add_translation_text(self) -> None:
+        """Insert a fresh user-authored text bubble into the page.
+
+        Adds a default-sized bbox at the image center plus an empty
+        TranslationResult tied to it, then opens the edit dialog so the
+        user can type the text immediately. After the dialog closes the
+        page re-renders with the new bubble in place. The user can then
+        switch on Move-Text to drag the bubble to its final position.
+        """
+        if self.ctx is None or self.ctx.source is None:
+            QMessageBox.information(
+                self, tr("dialog.no_image_title"), tr("dialog.no_image_body")
+            )
+            return
+        # If there are no existing translations and no cleaned image, the
+        # user hasn't run Translate yet. We still allow the action — the
+        # renderer will inpaint Step-1 mask intersections with the new
+        # bbox, but if there's no mask either we'll just paint on top of
+        # the source. The user can adjust manually from there.
+        h, w = self.ctx.source.shape[:2]
+        bw = min(200, max(40, w // 4))
+        bh = min(80, max(20, h // 8))
+        x = max(0, (w - bw) // 2)
+        y = max(0, (h - bh) // 2)
+        bbox = BBox(x=x, y=y, w=bw, h=bh, area=bw * bh)
+        self.ctx.bboxes.append(bbox)
+        # An empty text_ja keeps Step 4 from re-translating it later if
+        # the user runs Translate again — empty Japanese is a clear marker
+        # of "this is a user-authored bubble, not OCR output".
+        new_tr = TranslationResult(
+            bbox=bbox,
+            text_ja="",
+            text_ko="",
+        )
+        self.ctx.translations.append(new_tr)
+        # Force final to be regenerated when the user re-renders.
+        self.ctx.final = None
+        new_idx = len(self.ctx.translations) - 1
+        self._refresh_tabs(self.ctx)
+        # Snapshot the bbox-add itself so cancelling the edit dialog
+        # below still leaves an undoable trail.
+        self._record_history(tr("history.label.text_added"))
+        self._auto_save_metadata()
+        # Open the edit dialog right away so the user can type the text.
+        # If they save changes there, _on_translation_edit records its
+        # own snapshot.
+        self._on_translation_edit(new_idx)
 
     def _on_translation_edit(self, idx: int) -> None:
         if self.ctx is None or idx < 0 or idx >= len(self.ctx.translations):
@@ -706,19 +968,36 @@ class MainWindow(QMainWindow):
             font_pt=tr_item.font_pt,
             text_align=getattr(tr_item, "text_align", "center") or "center",
             text_rotation=int(getattr(tr_item, "text_rotation", 0) or 0),
+            fill_rgb=getattr(tr_item, "fill_rgb", None),
+            stroke_rgb=getattr(tr_item, "stroke_rgb", None),
+            bg_fill_enabled=bool(getattr(tr_item, "bg_fill_enabled", False)),
+            bg_fill_rgb=tuple(getattr(tr_item, "bg_fill_rgb", (255, 255, 255))),
+            bg_fill_pad=int(getattr(tr_item, "bg_fill_pad", 6)),
             available_fonts=self.side_panel.known_fonts,
             default_font_pt=self.config.step5.outside_pt,
+            default_fill_rgb=tuple(self.config.step5.fill_rgb),
+            default_stroke_rgb=tuple(self.config.step5.stroke_rgb),
             parent=self,
         )
         if dlg.exec():
             current_align = getattr(tr_item, "text_align", "center") or "center"
             current_rotation = int(getattr(tr_item, "text_rotation", 0) or 0)
+            current_fill = getattr(tr_item, "fill_rgb", None)
+            current_stroke = getattr(tr_item, "stroke_rgb", None)
+            current_bg_on = bool(getattr(tr_item, "bg_fill_enabled", False))
+            current_bg_rgb = tuple(getattr(tr_item, "bg_fill_rgb", (255, 255, 255)))
+            current_bg_pad = int(getattr(tr_item, "bg_fill_pad", 6))
             changed = (
                 dlg.korean != tr_item.text_ko
                 or dlg.font_path != tr_item.font_path
                 or dlg.font_pt != tr_item.font_pt
                 or dlg.text_align != current_align
                 or dlg.text_rotation != current_rotation
+                or dlg.fill_rgb != current_fill
+                or dlg.stroke_rgb != current_stroke
+                or dlg.bg_fill_enabled != current_bg_on
+                or dlg.bg_fill_rgb != current_bg_rgb
+                or dlg.bg_fill_pad != current_bg_pad
             )
             if changed:
                 tr_item.text_ko = dlg.korean
@@ -728,9 +1007,115 @@ class MainWindow(QMainWindow):
                 tr_item.font_pt = dlg.font_pt
                 tr_item.text_align = dlg.text_align
                 tr_item.text_rotation = dlg.text_rotation
+                tr_item.fill_rgb = dlg.fill_rgb
+                tr_item.stroke_rgb = dlg.stroke_rgb
+                tr_item.bg_fill_enabled = dlg.bg_fill_enabled
+                tr_item.bg_fill_rgb = dlg.bg_fill_rgb
+                tr_item.bg_fill_pad = dlg.bg_fill_pad
                 self.ctx.final = None
                 self._refresh_tabs(self.ctx)
+                self._record_history(tr("history.label.translation_edited", idx=idx))
                 self._launch_thread(step=5)
+
+    # ----------------------------------------------------------------- history
+
+    def _record_history(self, label: str) -> None:
+        """Snapshot the current ctx into the undo stack.
+
+        Skipped while a queue is running (queue edits aren't user
+        actions on the displayed page) or while we're in the middle of
+        applying an undo/redo (otherwise undo would clear redo).
+        """
+        if self.ctx is None:
+            return
+        if self._queue_active or self._restoring_history:
+            return
+        self.history.record(self.ctx, label)
+        self._refresh_history_ui()
+
+    def _refresh_history_ui(self) -> None:
+        self.history_dock.refresh()
+        self.undo_act.setEnabled(self.history.can_undo())
+        self.redo_act.setEnabled(self.history.can_redo())
+
+    def _on_undo(self) -> None:
+        if self.ctx is None or not self.history.can_undo():
+            return
+        self._restoring_history = True
+        try:
+            entry = self.history.undo(self.ctx)
+        finally:
+            self._restoring_history = False
+        if entry is None:
+            return
+        self._post_history_apply(tr("status.undo", label=entry.label))
+
+    def _on_redo(self) -> None:
+        if self.ctx is None or not self.history.can_redo():
+            return
+        self._restoring_history = True
+        try:
+            entry = self.history.redo(self.ctx)
+        finally:
+            self._restoring_history = False
+        if entry is None:
+            return
+        self._post_history_apply(tr("status.redo", label=entry.label))
+
+    def _post_history_apply(self, status_msg: str) -> None:
+        """Common tail for undo/redo/jump: refresh UI, save, re-render.
+
+        Re-rendering is conditional on having translations to render —
+        otherwise Step 5 would just error out. The launch is silent and
+        non-blocking so the user immediately sees the bbox-level state
+        change, with the final image catching up shortly after.
+        """
+        self._refresh_tabs(self.ctx)
+        self._refresh_history_ui()
+        self._auto_save_metadata()
+        self.status_bar.showMessage(status_msg, 4000)
+        # Re-render so the visible Translate-tab final image matches
+        # the restored translation/bbox state instead of waiting for
+        # the user to press Render manually. Skipped when there's
+        # nothing to render or while the worker is busy.
+        if (
+            self.ctx is not None
+            and self.ctx.translations
+            and not self._queue_active
+            and (self._thread is None or not self._thread.isRunning())
+        ):
+            self._launch_thread(step=5)
+
+    def _on_history_jump(self, target_idx: int) -> None:
+        """Step through undo / redo until the dock-clicked entry is current.
+
+        Bounded by the union of undo + redo stacks; ignored when the
+        doc is empty or while a queue is running.
+        """
+        if self.ctx is None or self._queue_active:
+            return
+        steps = target_idx - self.history.current_index
+        if steps == 0:
+            return
+        self._restoring_history = True
+        try:
+            if steps < 0:
+                for _ in range(-steps):
+                    if not self.history.can_undo():
+                        break
+                    self.history.undo(self.ctx)
+            else:
+                for _ in range(steps):
+                    if not self.history.can_redo():
+                        break
+                    self.history.redo(self.ctx)
+        finally:
+            self._restoring_history = False
+        direction = (
+            tr("status.redo", label="…") if steps > 0
+            else tr("status.undo", label="…")
+        )
+        self._post_history_apply(direction)
 
     # ----------------------------------------------------------------- refresh
 

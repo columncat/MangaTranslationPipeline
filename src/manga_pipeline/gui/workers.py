@@ -16,10 +16,14 @@ from ..pipeline.step5_render import Step5Render
 
 PHASE_DETECT = "detect"
 PHASE_TRANSLATE = "translate"
+# Step 5 only — keeps existing bboxes / OCR / translations and just
+# regenerates the cleaned image and final PNG.
+PHASE_RENDER = "render"
 
 PHASE_STEPS = {
     PHASE_DETECT: (1, 2),
     PHASE_TRANSLATE: (3, 4, 5),
+    PHASE_RENDER: (5,),
 }
 
 QUEUE_MODE_SEQUENTIAL = "sequential"
@@ -27,6 +31,29 @@ QUEUE_MODE_PER_STEP = "per_step"
 
 LoadFn = Callable[[Path], Optional[PageContext]]
 SaveFn = Callable[[PageContext, Path], None]
+
+
+def _cascade_clear(ctx: PageContext, phase: str) -> None:
+    """Clear ``ctx`` fields that the upcoming ``phase`` will regenerate.
+
+    - ``detect``    → bboxes, ocr, translations, cleaned, final
+    - ``translate`` → ocr, translations, cleaned, final (keeps bboxes)
+    - ``render``    → cleaned, final (keeps bboxes / ocr / translations)
+    """
+    if phase == PHASE_DETECT:
+        ctx.bboxes = []
+        ctx.ocr = []
+        ctx.translations = []
+        ctx.cleaned = None
+        ctx.final = None
+    elif phase == PHASE_TRANSLATE:
+        ctx.ocr = []
+        ctx.translations = []
+        ctx.cleaned = None
+        ctx.final = None
+    elif phase == PHASE_RENDER:
+        ctx.cleaned = None
+        ctx.final = None
 
 
 class PipelineWorker(QObject):
@@ -54,6 +81,7 @@ class PipelineWorker(QObject):
     PHASE_LABELS = {
         PHASE_DETECT: "Detect (mask + bboxes)",
         PHASE_TRANSLATE: "Translate (OCR + translate + render)",
+        PHASE_RENDER: "Render (Step 5 only)",
     }
 
     def __init__(self):
@@ -125,6 +153,8 @@ class PipelineWorker(QObject):
         - ``detect``: steps 1 then 2. View update only fires once at the end.
         - ``translate``: steps 3, 4, 5. View update fires after each substep
           so the user gets progressive feedback (OCR → translation → final).
+        - ``render``: step 5 only — keeps OCR/translations and just rebuilds
+          the cleaned image and final PNG.
         """
         steps = PHASE_STEPS.get(phase)
         if steps is None:
@@ -133,17 +163,7 @@ class PipelineWorker(QObject):
         self.reset_cancel()
         self.phase_started.emit(phase)
 
-        if phase == PHASE_DETECT:
-            ctx.bboxes = []
-            ctx.ocr = []
-            ctx.translations = []
-            ctx.cleaned = None
-            ctx.final = None
-        else:  # translate
-            ctx.ocr = []
-            ctx.translations = []
-            ctx.cleaned = None
-            ctx.final = None
+        _cascade_clear(ctx, phase)
 
         last: StepResult = StepResult(ok=True, message="")
         for idx in steps:
@@ -156,7 +176,7 @@ class PipelineWorker(QObject):
             if not last.ok:
                 break
 
-        if phase == PHASE_DETECT:
+        if phase in (PHASE_DETECT, PHASE_RENDER):
             self.page_updated.emit(ctx)
 
         self.phase_finished.emit(phase, last.ok, last.message)
@@ -248,16 +268,13 @@ class PipelineWorker(QObject):
             if ctx is None:
                 self.queue_item_finished.emit(p, False, "load failed")
 
-        # Cascade-clear for the phases we're about to run.
+        # Cascade-clear: only fields that the requested phases will
+        # regenerate. Render-only keeps OCR/translations intact.
         for ctx in contexts:
             if ctx is None:
                 continue
-            if PHASE_DETECT in phases:
-                ctx.bboxes = []
-            ctx.ocr = []
-            ctx.translations = []
-            ctx.cleaned = None
-            ctx.final = None
+            for phase in phases:
+                _cascade_clear(ctx, phase)
 
         failed: set[int] = {i for i, c in enumerate(contexts) if c is None}
 

@@ -4,9 +4,11 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -14,6 +16,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
+    QPushButton,
     QRadioButton,
     QSpinBox,
     QVBoxLayout,
@@ -23,21 +26,82 @@ from PySide6.QtWidgets import (
 from ..i18n import tr
 
 
+class _ColorSwatchButton(QPushButton):
+    """Small button that acts as a colour swatch and opens a colour picker.
+
+    The current colour is stored as an ``(r, g, b)`` tuple; ``None`` means
+    "use the renderer default" and is rendered as a hatched / faded
+    appearance so the user can tell the override is unset.
+    """
+
+    def __init__(
+        self,
+        rgb: Optional[tuple[int, int, int]],
+        *,
+        default_rgb: tuple[int, int, int] = (0, 0, 0),
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setFixedSize(48, 22)
+        self._rgb = tuple(rgb) if rgb is not None else None
+        self._default_rgb = default_rgb
+        self.clicked.connect(self._pick)
+        self._refresh_swatch()
+
+    @property
+    def rgb(self) -> Optional[tuple[int, int, int]]:
+        return self._rgb
+
+    def set_rgb(self, rgb: Optional[tuple[int, int, int]]) -> None:
+        self._rgb = tuple(rgb) if rgb is not None else None
+        self._refresh_swatch()
+
+    def reset_to_default(self) -> None:
+        self._rgb = None
+        self._refresh_swatch()
+
+    def _refresh_swatch(self) -> None:
+        if self._rgb is None:
+            r, g, b = self._default_rgb
+            self.setText("(default)")
+            self.setStyleSheet(
+                f"QPushButton {{ background-color: rgb({r},{g},{b}); "
+                f"color: {'white' if (r + g + b) < 384 else 'black'}; "
+                f"border: 1px dashed #888; font-size: 9px; }}"
+            )
+        else:
+            r, g, b = self._rgb
+            self.setText("")
+            self.setStyleSheet(
+                f"QPushButton {{ background-color: rgb({r},{g},{b}); "
+                f"border: 1px solid #555; }}"
+            )
+
+    def _pick(self) -> None:
+        seed = self._rgb if self._rgb is not None else self._default_rgb
+        chosen = QColorDialog.getColor(
+            QColor(*seed), self, tr("edit.color_pick_title")
+        )
+        if chosen.isValid():
+            self._rgb = (chosen.red(), chosen.green(), chosen.blue())
+            self._refresh_swatch()
+
+
 class TranslationEditDialog(QDialog):
     """Edit the Korean translation of a single bbox.
 
-    Translations are now always rendered with ``ignore_boundary`` semantics
-    (centered on the bbox, only user-inserted ``\\n`` splits lines), so the
-    Ignore Boundary checkbox has been removed.
+    Translations are always rendered with ``ignore_boundary`` semantics
+    (centered on the bbox, only user-inserted ``\\n`` splits lines).
 
     Controls:
       - Korean text editor (Ctrl+Enter accepts)
-      - Font dropdown — choices come from the side panel's Fonts library;
-        ``(default)`` falls back to the renderer's default font
-      - Font size spinbox — initial value is the dialogue's current effective
-        size (per-item override if set, otherwise the Step5 default)
+      - Font dropdown — choices come from the side panel's Fonts library
+      - Font size spinbox — initial value is the dialogue's current
+        effective size (per-item override if set, otherwise Step5 default)
       - Alignment radio (left / center / right)
       - Rotation spinbox in degrees
+      - Text fill / stroke colour swatches (per-dialogue overrides)
+      - Optional ellipse background fill with its own colour and padding
     """
 
     def __init__(
@@ -48,13 +112,20 @@ class TranslationEditDialog(QDialog):
         font_pt: Optional[int] = None,
         text_align: str = "center",
         text_rotation: int = 0,
+        fill_rgb: Optional[tuple[int, int, int]] = None,
+        stroke_rgb: Optional[tuple[int, int, int]] = None,
+        bg_fill_enabled: bool = False,
+        bg_fill_rgb: tuple[int, int, int] = (255, 255, 255),
+        bg_fill_pad: int = 6,
         available_fonts: Optional[Sequence[str]] = None,
         default_font_pt: int = 36,
+        default_fill_rgb: tuple[int, int, int] = (0, 0, 0),
+        default_stroke_rgb: tuple[int, int, int] = (255, 255, 255),
         parent=None,
     ):
         super().__init__(parent)
         self.setWindowTitle(tr("edit.title"))
-        self.setMinimumSize(480, 380)
+        self.setMinimumSize(520, 480)
 
         layout = QVBoxLayout(self)
 
@@ -81,8 +152,6 @@ class TranslationEditDialog(QDialog):
                 continue
             seen.add(fp)
             self.font_combo.addItem(Path(fp).name, fp)
-        # Pre-select the currently stored font, or insert as orphan if it's
-        # not in the library so the user doesn't lose the existing setting.
         selected_idx = 0
         if font_path:
             for i in range(1, self.font_combo.count()):
@@ -138,6 +207,65 @@ class TranslationEditDialog(QDialog):
         self.rotation_box.setToolTip(tr("edit.rotation_tip"))
         overrides.addRow(tr("edit.rotation"), self.rotation_box)
 
+        # ----- Colour overrides -----
+        # Fill colour (the body of each glyph). Has a Reset button to revert
+        # to the renderer's Step5Params default.
+        self.fill_swatch = _ColorSwatchButton(fill_rgb, default_rgb=default_fill_rgb)
+        fill_row = QHBoxLayout()
+        fill_row.addWidget(self.fill_swatch)
+        fill_reset = QPushButton(tr("edit.color_reset"))
+        fill_reset.setMaximumWidth(72)
+        fill_reset.clicked.connect(self.fill_swatch.reset_to_default)
+        fill_row.addWidget(fill_reset)
+        fill_row.addStretch(1)
+        fill_wrap = QWidget()
+        fill_wrap.setLayout(fill_row)
+        overrides.addRow(tr("edit.text_color"), fill_wrap)
+
+        self.stroke_swatch = _ColorSwatchButton(
+            stroke_rgb, default_rgb=default_stroke_rgb
+        )
+        stroke_row = QHBoxLayout()
+        stroke_row.addWidget(self.stroke_swatch)
+        stroke_reset = QPushButton(tr("edit.color_reset"))
+        stroke_reset.setMaximumWidth(72)
+        stroke_reset.clicked.connect(self.stroke_swatch.reset_to_default)
+        stroke_row.addWidget(stroke_reset)
+        stroke_row.addStretch(1)
+        stroke_wrap = QWidget()
+        stroke_wrap.setLayout(stroke_row)
+        overrides.addRow(tr("edit.stroke_color"), stroke_wrap)
+
+        # ----- Background fill (ellipse) -----
+        self.bg_check = QCheckBox(tr("edit.bg_fill"))
+        self.bg_check.setChecked(bool(bg_fill_enabled))
+        self.bg_check.setToolTip(tr("edit.bg_fill_tip"))
+        overrides.addRow("", self.bg_check)
+
+        self.bg_swatch = _ColorSwatchButton(bg_fill_rgb, default_rgb=(255, 255, 255))
+        self.bg_pad_box = QSpinBox()
+        self.bg_pad_box.setRange(0, 80)
+        self.bg_pad_box.setSuffix(" px")
+        self.bg_pad_box.setValue(int(bg_fill_pad))
+        bg_row = QHBoxLayout()
+        bg_row.addWidget(self.bg_swatch)
+        bg_row.addSpacing(6)
+        bg_row.addWidget(QLabel(tr("edit.bg_fill_pad")))
+        bg_row.addWidget(self.bg_pad_box)
+        bg_row.addStretch(1)
+        bg_wrap = QWidget()
+        bg_wrap.setLayout(bg_row)
+        overrides.addRow("", bg_wrap)
+
+        # Disable the bg colour/pad widgets when the checkbox is off so it's
+        # obvious that they're not in effect.
+        def _sync_bg_enabled(state: bool) -> None:
+            self.bg_swatch.setEnabled(state)
+            self.bg_pad_box.setEnabled(state)
+
+        self.bg_check.toggled.connect(_sync_bg_enabled)
+        _sync_bg_enabled(self.bg_check.isChecked())
+
         layout.addLayout(overrides)
 
         buttons = QDialogButtonBox(
@@ -154,6 +282,8 @@ class TranslationEditDialog(QDialog):
 
         self.editor.setFocus(Qt.FocusReason.OtherFocusReason)
         self.editor.selectAll()
+
+    # ---- result properties ----
 
     @property
     def korean(self) -> str:
@@ -178,3 +308,24 @@ class TranslationEditDialog(QDialog):
     @property
     def text_rotation(self) -> int:
         return int(self.rotation_box.value())
+
+    @property
+    def fill_rgb(self) -> Optional[tuple[int, int, int]]:
+        return self.fill_swatch.rgb
+
+    @property
+    def stroke_rgb(self) -> Optional[tuple[int, int, int]]:
+        return self.stroke_swatch.rgb
+
+    @property
+    def bg_fill_enabled(self) -> bool:
+        return self.bg_check.isChecked()
+
+    @property
+    def bg_fill_rgb(self) -> tuple[int, int, int]:
+        # Background swatch is never None — falls back to white if untouched.
+        return self.bg_swatch.rgb or (255, 255, 255)
+
+    @property
+    def bg_fill_pad(self) -> int:
+        return int(self.bg_pad_box.value())

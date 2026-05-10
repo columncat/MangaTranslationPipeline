@@ -6,13 +6,22 @@ from typing import Callable, Optional
 
 import requests
 
-from ..paths import CTD_WEIGHTS, ensure_dirs
+from ..paths import CTD_WEIGHTS, EMBEDDED_LLM_FILENAME, EMBEDDED_LLM_WEIGHTS, ensure_dirs
 
 CTD_URL = (
     "https://github.com/zyddnys/manga-image-translator/releases/download/"
     "beta-0.3/comictextdetector.pt"
 )
 CTD_SHA256: Optional[str] = None
+
+# unsloth's GGUF mirror — high download count, actively maintained.
+# Q4_K_M trades a small quality hit for a ~5 GB file size and good
+# tokens/sec on consumer GPUs.
+EMBEDDED_LLM_URL = (
+    "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/"
+    + EMBEDDED_LLM_FILENAME
+)
+EMBEDDED_LLM_SHA256: Optional[str] = None
 
 ProgressFn = Callable[[int, int], None]
 
@@ -68,6 +77,32 @@ def ensure_ctd_weights(progress: Optional[ProgressFn] = None) -> Path:
 
 def ctd_weights_present() -> bool:
     return CTD_WEIGHTS.exists() and CTD_WEIGHTS.stat().st_size > 0
+
+
+def ensure_embedded_llm_weights(
+    progress: Optional[ProgressFn] = None,
+) -> Path:
+    """Download the embedded translation LLM (Gemma 4 E4B-it Q4_K_M).
+
+    Lazy: skipped if the file already exists. The expected size on
+    disk is around 5 GB so callers should usually present a progress
+    dialog before invoking this on a foreground thread.
+    """
+    return download_file(
+        EMBEDDED_LLM_URL,
+        EMBEDDED_LLM_WEIGHTS,
+        expected_sha256=EMBEDDED_LLM_SHA256,
+        progress=progress,
+    )
+
+
+def embedded_llm_weights_present() -> bool:
+    # A few hundred MB threshold guards against an aborted partial
+    # download being mistaken for a complete file.
+    return (
+        EMBEDDED_LLM_WEIGHTS.exists()
+        and EMBEDDED_LLM_WEIGHTS.stat().st_size > 1 << 28  # > 256 MB
+    )
 
 
 def ensure_lama_weights(progress: Optional[ProgressFn] = None) -> None:

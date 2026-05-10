@@ -11,6 +11,10 @@ CACHE_DIR = MODELS_DIR / "cache"
 
 CTD_WEIGHTS = MODELS_DIR / "comictextdetector.pt"
 
+# Embedded translation LLM (Gemma 4 E4B-it Q4_K_M, ~5 GB).
+EMBEDDED_LLM_FILENAME = "gemma-4-E4B-it-Q4_K_M.gguf"
+EMBEDDED_LLM_WEIGHTS = MODELS_DIR / EMBEDDED_LLM_FILENAME
+
 
 def ensure_dirs() -> None:
     for p in (MODELS_DIR, FONTS_DIR, SAMPLES_DIR, CACHE_DIR):

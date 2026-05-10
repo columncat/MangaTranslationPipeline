@@ -1,142 +1,71 @@
+"""Step 4 — translate Japanese OCR text into Korean.
+
+The actual translation work is delegated to a :class:`Translator`
+instance built by :func:`manga_pipeline.ai.make_translator`, so the
+pipeline doesn't care whether the backend is Anthropic, OpenAI-
+compatible, Ollama, or anything else — it just hands over the JA
+strings and receives KO strings back in the same order.
+"""
 from __future__ import annotations
 
-import json
-import re
 from typing import Optional
 
+from ..ai import (
+    AIProvider,
+    BackendUnavailable,
+    TranslatorConfig,
+    make_translator,
+)
+
+# Re-exported for tests and any v1.0-era callers that imported the
+# helpers from this module directly.
+from ..ai.base import (
+    build_system_prompt as _build_system_prompt,
+    extract_translation_json as _extract_json,
+    parse_batch_response,
+)
 from ..config import Step4Params
-from ..models import OcrResult, PageContext, TranslationResult
-from ..utils.secrets import get_anthropic_key
+from ..models import PageContext, TranslationResult
+from ..utils.secrets import get_api_key, get_anthropic_key
 from .base import PipelineStep, ProgressCallback, StepResult
 
-SYSTEM_TEMPLATE = """You are a professional Japanese-to-Korean manga translator.
-Translate each line into natural Korean dialogue suitable for the speech bubble.
-Preserve tone, honorifics, sound effects, and character voice.
-Because Korean and Japanese have very similar sentence structures, translate based on meaning while keeping the sentence structure as close to a literal translation as possible.
 
-Insert newline characters (`\n`) to fit the text into vertical manga speech bubbles by following the rules below.
-1. Keep lines balanced in length, typically 4-6 Korean characters per line, except spacing and punctuation.
-2. Break lines at natural spaces (boundaries). Avoid to split a single word in half.
-3. Write in 2 lines (single newline character) when text is around 10 characters, 3 lines if under 20 characters.
+def _config_from_params(params: Step4Params) -> TranslatorConfig:
+    """Map :class:`Step4Params` → backend-agnostic :class:`TranslatorConfig`.
 
-Do not add commentary, romanization, or notes — only the Korean translation.
-
-Glossary (use these exact translations when the source matches):
-{glossary}
-
-Style notes: {style_notes}
-
-Output strictly as JSON: {{"translations":[{{"id":<int>,"ko":"<korean>"}}, ...]}}.
-Include every input id exactly once. No prose outside JSON."""
-
-
-def _build_system_prompt(glossary: str, style: str) -> str:
-    g = glossary.strip() or "(none)"
-    s = style.strip() or "(none)"
-    return SYSTEM_TEMPLATE.format(glossary=g, style_notes=s)
-
-
-def _extract_json(text: str) -> Optional[dict]:
-    text = text.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except json.JSONDecodeError:
-            return None
-    return None
-
-
-class ClaudeTranslator:
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-6", max_tokens: int = 4096):
-        from anthropic import Anthropic
-
-        self.client = Anthropic(api_key=api_key)
-        self.model = model
-        self.max_tokens = max_tokens
-
-    def translate_batch(
-        self,
-        lines: list[str],
-        glossary: str = "",
-        style: str = "",
-    ) -> list[str]:
-        if not lines:
-            return []
-
-        system_text = _build_system_prompt(glossary, style)
-        system = [
-            {
-                "type": "text",
-                "text": system_text,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ]
-        payload = [{"id": i, "ja": line} for i, line in enumerate(lines)]
-        user = json.dumps(payload, ensure_ascii=False)
-
-        resp = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        text = "".join(getattr(b, "text", "") for b in resp.content)
-
-        data = _extract_json(text)
-        out = [""] * len(lines)
-        if data and isinstance(data.get("translations"), list):
-            for item in data["translations"]:
-                idx = item.get("id")
-                ko = item.get("ko", "")
-                if isinstance(idx, int) and 0 <= idx < len(lines):
-                    out[idx] = str(ko).strip()
-
-        for i, ko in enumerate(out):
-            if not ko:
-                out[i] = self.translate_one(lines[i], glossary, style)
-        return out
-
-    def translate_one(self, line: str, glossary: str = "", style: str = "") -> str:
-        if not line.strip():
-            return ""
-        system_text = _build_system_prompt(glossary, style)
-        resp = self.client.messages.create(
-            model=self.model,
-            max_tokens=512,
-            system=[
-                {
-                    "type": "text",
-                    "text": system_text,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        [{"id": 0, "ja": line}], ensure_ascii=False
-                    ),
-                }
-            ],
-        )
-        text = "".join(getattr(b, "text", "") for b in resp.content)
-        data = _extract_json(text)
-        if data and data.get("translations"):
-            ko = data["translations"][0].get("ko", "")
-            return str(ko).strip()
-        return line
+    The API key is sourced from the OS keyring / env var when the chosen
+    provider needs one (Anthropic, OpenAI-compatible, Gemini). Local
+    backends (Ollama, llama.cpp) don't use it.
+    """
+    cloud_providers = (
+        AIProvider.ANTHROPIC,
+        AIProvider.OPENAI_COMPAT,
+        AIProvider.GEMINI,
+    )
+    api_key = None
+    if params.provider in cloud_providers:
+        api_key = get_api_key(params.provider)
+    return TranslatorConfig(
+        provider=params.provider,
+        model=params.model,
+        max_tokens=params.max_tokens,
+        api_key=api_key,
+        base_url=params.base_url,
+        model_path=params.model_path,
+        n_ctx=params.n_ctx,
+        n_gpu_layers=params.n_gpu_layers,
+    )
 
 
 class Step4Translate(PipelineStep):
     name = "step4_translate"
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or get_anthropic_key()
+        # ``api_key`` is kept as a constructor argument for backwards
+        # compatibility with v1.0 callers; it's only consulted when the
+        # configured provider is Anthropic and no key is found via the
+        # keyring fallback.
+        self._explicit_api_key = api_key
 
     def run(
         self,
@@ -161,19 +90,29 @@ class Step4Translate(PipelineStep):
                 ok=True, message=f"{len(ctx.translations)} kept as JA (skip on)"
             )
 
-        if not self.api_key:
+        cfg = _config_from_params(params)
+        # If the user picked Anthropic but the keyring lookup failed,
+        # honour the explicit key passed to the step constructor (v1.0).
+        if cfg.provider == AIProvider.ANTHROPIC and not cfg.api_key:
+            cfg.api_key = self._explicit_api_key
+        if cfg.provider == AIProvider.ANTHROPIC and not cfg.api_key:
             return StepResult(ok=False, message="ANTHROPIC_API_KEY not set")
 
         if progress:
-            progress(0, len(ctx.ocr), "calling Claude")
+            progress(0, len(ctx.ocr), f"calling {cfg.provider}")
 
-        translator = ClaudeTranslator(
-            api_key=self.api_key, model=params.model, max_tokens=params.max_tokens
-        )
+        try:
+            translator = make_translator(cfg)
+        except BackendUnavailable as e:
+            return StepResult(ok=False, message=f"backend unavailable: {e}", error=e)
 
         lines = [r.text_ja for r in ctx.ocr]
         try:
-            ko_lines = translator.translate_batch(lines, params.glossary, params.style_notes)
+            ko_lines = translator.translate_batch(
+                lines, params.glossary, params.style_notes
+            )
+        except BackendUnavailable as e:
+            return StepResult(ok=False, message=f"backend unavailable: {e}", error=e)
         except Exception as e:  # noqa: BLE001
             return StepResult(ok=False, message=f"translation failed: {e}", error=e)
 
@@ -186,9 +125,28 @@ class Step4Translate(PipelineStep):
         return StepResult(ok=True, message=f"{len(ctx.translations)} translated")
 
 
+# Backwards-compatible re-export so existing tests that import
+# ``ClaudeTranslator`` from this module keep working.
+def ClaudeTranslator(*args, **kwargs):  # noqa: N802 — keep legacy name
+    """Shim: build the new AnthropicTranslator from the v1.0 call signature.
+
+    v1.0 callers used ``ClaudeTranslator(api_key=..., model=..., max_tokens=...)``.
+    """
+    from ..ai.anthropic_backend import AnthropicTranslator
+
+    cfg = TranslatorConfig(
+        provider=AIProvider.ANTHROPIC,
+        api_key=kwargs.get("api_key") or (args[0] if args else None),
+        model=kwargs.get("model", "claude-sonnet-4-6"),
+        max_tokens=kwargs.get("max_tokens", 4096),
+    )
+    return AnthropicTranslator(cfg)
+
+
 __all__ = [
     "ClaudeTranslator",
     "Step4Translate",
     "_build_system_prompt",
     "_extract_json",
+    "parse_batch_response",
 ]
