@@ -337,7 +337,11 @@ class SidePanel(QWidget):
         self._set_form_row_visible(self.s4_base_url, wants_base_url)
         self._set_form_row_visible(self._s4_model_path_wrap, wants_model_path)
 
-        self._sync()
+        # Skip the initial sync from Step 4's __init__ — Step 5 widgets
+        # don't exist yet. The final sync happens after all groups are
+        # built via the explicit refresh in __init__.
+        if hasattr(self, "s5_font_combo"):
+            self._sync()
 
     def _set_form_row_visible(self, widget: QWidget, visible: bool) -> None:
         """Hide both the field and its label in the QFormLayout."""

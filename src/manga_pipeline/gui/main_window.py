@@ -24,7 +24,8 @@ from ..i18n import set_language, tr
 from ..models import BBox, PageContext, TranslationResult
 from ..utils.fonts import find_default_font
 from ..utils.image_io import load_rgb, save_image
-from ..utils.secrets import get_anthropic_key
+from ..ai import AIProvider
+from ..utils.secrets import get_api_key
 from .dialogs import TranslationEditDialog
 from .explorer import ExplorerPanel
 from .language_dialog import LanguageDialog
@@ -76,7 +77,7 @@ class MainWindow(QMainWindow):
         self._build_status_bar()
         self._wire_signals()
 
-        self.side_panel.set_api_key_status(get_anthropic_key() is not None)
+        self.side_panel.set_api_key_status(self._current_api_key_present())
         self._push_render_defaults()
         self.status_bar.showMessage(
             tr("status.device_ready", device=auto_device())
@@ -137,6 +138,12 @@ class MainWindow(QMainWindow):
         self.side_panel.api_key_clicked.connect(self._on_set_api_key)
         self.side_panel.config_changed.connect(self._save_config)
         self.side_panel.config_changed.connect(self._push_render_defaults)
+        # Re-evaluate API-key status whenever the user switches backends.
+        self.side_panel.config_changed.connect(
+            lambda: self.side_panel.set_api_key_status(
+                self._current_api_key_present()
+            )
+        )
 
     def _build_toolbar(self) -> None:
         tb = QToolBar("Main", self)
@@ -332,10 +339,40 @@ class MainWindow(QMainWindow):
             return None
         return self._source_path.parent / "translated" / self._source_path.name
 
+    # ---- per-provider API-key plumbing ----
+
+    # Backends that need an API key managed by the keyring.
+    _KEYED_PROVIDERS = (
+        AIProvider.ANTHROPIC,
+        AIProvider.OPENAI_COMPAT,
+        AIProvider.GEMINI,
+    )
+
+    def _current_provider(self) -> str:
+        return getattr(self.config.step4, "provider", AIProvider.ANTHROPIC)
+
+    def _current_api_key_present(self) -> bool:
+        provider = self._current_provider()
+        if provider not in self._KEYED_PROVIDERS:
+            # Local backends don't use a key — treat as "always present"
+            # so the side panel doesn't flag a false missing-key warning.
+            return True
+        return get_api_key(provider) is not None
+
     def _on_set_api_key(self) -> None:
-        dlg = ApiKeyDialog(self)
+        provider = self._current_provider()
+        # If the user has picked a local backend, opening the dialog
+        # would make no sense — surface a short hint instead.
+        if provider not in self._KEYED_PROVIDERS:
+            QMessageBox.information(
+                self,
+                tr("apikey.title"),
+                tr("apikey.local_backend_no_key"),
+            )
+            return
+        dlg = ApiKeyDialog(provider=provider, parent=self)
         if dlg.exec():
-            self.side_panel.set_api_key_status(get_anthropic_key() is not None)
+            self.side_panel.set_api_key_status(self._current_api_key_present())
 
     def _on_change_language(self) -> None:
         dlg = LanguageDialog(current=self.config.ui_language, parent=self)
@@ -362,9 +399,9 @@ class MainWindow(QMainWindow):
                 self, tr("dialog.no_image_title"), tr("dialog.no_image_body")
             )
             return
-        if phase == PHASE_TRANSLATE and not get_anthropic_key():
+        if phase == PHASE_TRANSLATE and not self._current_api_key_present():
             self._on_set_api_key()
-            if not get_anthropic_key():
+            if not self._current_api_key_present():
                 return
         self._launch_thread(phase=phase)
 
@@ -374,9 +411,9 @@ class MainWindow(QMainWindow):
                 self, tr("dialog.no_image_title"), tr("dialog.no_image_body")
             )
             return
-        if not get_anthropic_key():
+        if not self._current_api_key_present():
             self._on_set_api_key()
-            if not get_anthropic_key():
+            if not self._current_api_key_present():
                 return
         self._launch_thread(all_phases=True)
 
@@ -402,9 +439,9 @@ class MainWindow(QMainWindow):
             phases_label in ("translate", "all")
             and not self.config.step4.skip_translation
         )
-        if needs_translate and not get_anthropic_key():
+        if needs_translate and not self._current_api_key_present():
             self._on_set_api_key()
-            if not get_anthropic_key():
+            if not self._current_api_key_present():
                 return
 
         if self.ctx is not None and self._source_path is not None:

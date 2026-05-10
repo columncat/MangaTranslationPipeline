@@ -11,15 +11,35 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ..ai import AIProvider
 from ..i18n import tr
-from ..utils.secrets import delete_anthropic_key, get_anthropic_key, set_anthropic_key
+from ..utils.secrets import delete_api_key, get_api_key, set_api_key
+
+
+# Providers that need an API key managed via this dialog.
+_KEYED_PROVIDERS = (
+    AIProvider.ANTHROPIC,
+    AIProvider.OPENAI_COMPAT,
+    AIProvider.GEMINI,
+)
 
 
 class ApiKeyDialog(QDialog):
-    def __init__(self, parent=None):
+    """Edits the cloud-provider API key for a chosen ``provider``.
+
+    Local backends (Ollama, llama.cpp) don't appear here; the dialog
+    silently no-ops if asked to manage one of them.
+    """
+
+    def __init__(self, provider: str = AIProvider.ANTHROPIC, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(tr("apikey.title"))
-        self.setMinimumWidth(420)
+        self.provider = (
+            provider if provider in _KEYED_PROVIDERS else AIProvider.ANTHROPIC
+        )
+        self.setWindowTitle(
+            tr("apikey.title.dynamic", provider=tr(f"side.s4.provider.{self.provider}"))
+        )
+        self.setMinimumWidth(440)
 
         layout = QVBoxLayout(self)
         body = QLabel(tr("apikey.body"))
@@ -27,7 +47,7 @@ class ApiKeyDialog(QDialog):
         layout.addWidget(body)
 
         row = QHBoxLayout()
-        self.edit = QLineEdit(get_anthropic_key() or "")
+        self.edit = QLineEdit(get_api_key(self.provider) or "")
         self.edit.setEchoMode(QLineEdit.EchoMode.Password)
         row.addWidget(self.edit, 1)
 
@@ -56,9 +76,9 @@ class ApiKeyDialog(QDialog):
     def _save(self) -> None:
         key = self.edit.text().strip()
         if key:
-            set_anthropic_key(key)
+            set_api_key(key, self.provider)
         self.accept()
 
     def _clear(self) -> None:
-        delete_anthropic_key()
+        delete_api_key(self.provider)
         self.edit.setText("")

@@ -26,19 +26,25 @@ from ..ai.base import (
 )
 from ..config import Step4Params
 from ..models import PageContext, TranslationResult
-from ..utils.secrets import get_anthropic_key
+from ..utils.secrets import get_api_key, get_anthropic_key
 from .base import PipelineStep, ProgressCallback, StepResult
 
 
 def _config_from_params(params: Step4Params) -> TranslatorConfig:
     """Map :class:`Step4Params` → backend-agnostic :class:`TranslatorConfig`.
 
-    The Anthropic API key is sourced from the OS keyring / env var when
-    the chosen provider needs one.
+    The API key is sourced from the OS keyring / env var when the chosen
+    provider needs one (Anthropic, OpenAI-compatible, Gemini). Local
+    backends (Ollama, llama.cpp) don't use it.
     """
+    cloud_providers = (
+        AIProvider.ANTHROPIC,
+        AIProvider.OPENAI_COMPAT,
+        AIProvider.GEMINI,
+    )
     api_key = None
-    if params.provider == AIProvider.ANTHROPIC:
-        api_key = get_anthropic_key()
+    if params.provider in cloud_providers:
+        api_key = get_api_key(params.provider)
     return TranslatorConfig(
         provider=params.provider,
         model=params.model,
