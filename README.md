@@ -7,11 +7,8 @@
 
 ## 시연 영상 / Demo
 
-<!-- 시연 영상이 준비되면 아래 주석을 해제하고 YOUR_VIDEO_ID 자리를 채우세요. -->
-<!-- [![Demo](https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://youtu.be/YOUR_VIDEO_ID) -->
-
-> 📽️ **시연 영상 준비 중입니다 / Demo video coming soon.**
->
+**섬네일을 클릭하여 유튜브로 이동**
+[![Demo](https://img.youtube.com/vi/xNEkKBk1e8A/maxresdefault.jpg)](https://youtu.be/xNEkKBk1e8A)
 > 시연 영상 속 만화 페이지는 *Manga109-s* 데이터셋의 작품을 사용했습니다.  
 > Manga pages shown in the demo are **Courtesy of NAOKO ETO, Manga109-s**.
 
@@ -25,9 +22,6 @@
 - **글자 색·윤곽선 색·타원 배경** per-translation 컨트롤
 - **번역 탭에서 텍스트 직접 추가** (자동 검출되지 않은 대사용)
 - **번역 탭에서도 bbox 편집** (Detect 탭과 동일한 드래그·리사이즈)
-- **작업 대기열에 일괄 렌더 버튼** (번역 결과 유지하며 Step 5만 다시)
-- 모델 응답 개행 정확도 개선을 위한 **few-shot 프롬프트**
-- 사이드패널 실행 버튼이 클릭 즉시 해당 탭으로 자동 전환
 
 ---
 
@@ -66,7 +60,7 @@ pip install -r vendor/comic_text_detector/requirements.txt
 pip install -r requirements-ai.txt
 ```
 
-내장 **Gemma 4 E4B** 백엔드용 GPU 가속 wheel은 `requirements-ai.txt` 첫 줄의 `--extra-index-url`에서 자동으로 가져옵니다 (Windows / Linux + NVIDIA CUDA).
+혹은 사용하실 백엔드에 해당하는 라이브러리만 개별적으로 설치해도 됩니다. (단, 내장 모델 사용 시 llama-cpp-python for CUDA 설치 필수)
 
 ### 폰트 (선택)
 
@@ -144,7 +138,7 @@ Source manga image
        │
        ▼
 ┌──────────────┐
-│  4. Translate│  AI backend (Claude / GPT / Gemini / Ollama /
+│ 4. Translate │  AI backend (Claude / GPT / Gemini / Ollama /
 │              │  llama.cpp / embedded Gemma 4) → Korean
 │              │  with glossary, style notes, prompt caching
 └──────┬───────┘
