@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 from .base import (
     BackendUnavailable,
@@ -44,14 +45,23 @@ class LlamaCppTranslator:
             raise BackendUnavailable(f"Model file not found: {path}")
 
         # Verbose=False keeps the GUI's stdout from being flooded with
-        # llama.cpp's per-token chatter on every batch.
+        # llama.cpp's per-token chatter on every batch. chat_format is
+        # left unset so llama.cpp picks the template baked into the
+        # GGUF metadata — this matters for Gemma (no chatml), Llama 3
+        # (its own format), Qwen (chatml), etc. Subclasses that know
+        # their target model can override _chat_format().
         self._llama = Llama(
             model_path=str(path),
             n_ctx=cfg.n_ctx,
             n_gpu_layers=cfg.n_gpu_layers,
             verbose=False,
-            chat_format="chatml",  # works for Qwen / many recent models
+            chat_format=self._chat_format(),
         )
+
+    @staticmethod
+    def _chat_format() -> Optional[str]:
+        # ``None`` → llama.cpp infers from the GGUF tokenizer.chat_template.
+        return None
         self._max_tokens = cfg.max_tokens
 
     def translate_batch(

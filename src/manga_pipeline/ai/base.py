@@ -27,6 +27,9 @@ class AIProvider:
     GEMINI = "gemini"
     OLLAMA = "ollama"
     LLAMACPP = "llamacpp"
+    # Auto-managed local backend that downloads Gemma 4 E4B-it Q4_K_M
+    # on first use and runs it through llama-cpp-python.
+    EMBEDDED = "embedded"
 
 
 PROVIDERS: tuple[str, ...] = (
@@ -35,6 +38,7 @@ PROVIDERS: tuple[str, ...] = (
     AIProvider.GEMINI,
     AIProvider.OLLAMA,
     AIProvider.LLAMACPP,
+    AIProvider.EMBEDDED,
 )
 
 
@@ -185,4 +189,8 @@ def make_translator(cfg: TranslatorConfig) -> Translator:
         from .llamacpp import LlamaCppTranslator
 
         return LlamaCppTranslator(cfg)
+    if p == AIProvider.EMBEDDED:
+        from .embedded import EmbeddedTranslator
+
+        return EmbeddedTranslator(cfg)
     raise BackendUnavailable(f"unknown provider {p!r}")

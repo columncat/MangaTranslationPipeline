@@ -199,6 +199,7 @@ class SidePanel(QWidget):
                 "llama3.1:8b",
             ],
             AIProvider.LLAMACPP: [],  # uses model_path instead
+            AIProvider.EMBEDDED: [],  # auto-managed Gemma 4 E4B GGUF
         }
         self._all_providers = list(PROVIDERS)
 
@@ -331,7 +332,11 @@ class SidePanel(QWidget):
             AIProvider.OLLAMA,
         )
         wants_model_path = provider == AIProvider.LLAMACPP
-        wants_model_name = provider != AIProvider.LLAMACPP
+        # Embedded auto-manages model path AND model name → hide both.
+        wants_model_name = provider not in (
+            AIProvider.LLAMACPP,
+            AIProvider.EMBEDDED,
+        )
 
         self._set_form_row_visible(self.s4_model, wants_model_name)
         self._set_form_row_visible(self.s4_base_url, wants_base_url)

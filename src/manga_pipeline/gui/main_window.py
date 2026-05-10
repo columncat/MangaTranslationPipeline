@@ -29,6 +29,7 @@ from ..ai import AIProvider
 from ..utils.secrets import get_api_key
 from .dialogs import TranslationEditDialog
 from .explorer import ExplorerPanel
+from .embedded_download_dialog import EmbeddedDownloadDialog
 from .history_dock import HistoryDock
 from .language_dialog import LanguageDialog
 from .mask_editor import MaskEditorDialog
@@ -410,6 +411,29 @@ class MainWindow(QMainWindow):
             return True
         return get_api_key(provider) is not None
 
+    def _ensure_embedded_weights(self) -> bool:
+        """Make sure the embedded LLM GGUF is on disk before Translate.
+
+        If the user has the ``embedded`` provider selected and the
+        weights are missing, pop up a download dialog and block until
+        it finishes. Returns True if it's safe to proceed (either we
+        don't need the embedded weights or the download succeeded),
+        False if the user cancelled or the download failed.
+        """
+        if self._current_provider() != AIProvider.EMBEDDED:
+            return True
+        if self.config.step4.skip_translation:
+            # Skip-translate path doesn't talk to the LLM at all.
+            return True
+        from ..ml.weights import embedded_llm_weights_present
+
+        if embedded_llm_weights_present():
+            return True
+        dlg = EmbeddedDownloadDialog(parent=self)
+        dlg.start()
+        dlg.exec()
+        return bool(dlg.success)
+
     def _on_set_api_key(self) -> None:
         provider = self._current_provider()
         # If the user has picked a local backend, opening the dialog
@@ -454,6 +478,8 @@ class MainWindow(QMainWindow):
             self._on_set_api_key()
             if not self._current_api_key_present():
                 return
+        if phase == PHASE_TRANSLATE and not self._ensure_embedded_weights():
+            return
         self._launch_thread(phase=phase)
 
     def _on_run_all(self) -> None:
@@ -466,6 +492,8 @@ class MainWindow(QMainWindow):
             self._on_set_api_key()
             if not self._current_api_key_present():
                 return
+        if not self._ensure_embedded_weights():
+            return
         self._launch_thread(all_phases=True)
 
     def _on_render(self) -> None:
@@ -494,6 +522,8 @@ class MainWindow(QMainWindow):
             self._on_set_api_key()
             if not self._current_api_key_present():
                 return
+        if needs_translate and not self._ensure_embedded_weights():
+            return
 
         if self.ctx is not None and self._source_path is not None:
             try:
