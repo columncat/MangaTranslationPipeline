@@ -52,7 +52,9 @@ Because Korean and Japanese have very similar sentence structures, translate bas
 Insert newline characters (`\\n`) to fit the text into vertical manga speech bubbles by following the rules below.
 1. Keep lines balanced in length, typically 4-6 Korean characters per line, except spacing and punctuation.
 2. Break lines at natural spaces (boundaries). Avoid to split a single word in half.
-3. Write in 2 lines (single newline character) when text is around 10 characters, 3 lines if under 20 characters.
+3. Write in 2 lines (single newline character) when the result is around 10 Korean characters, 3 lines for ~15 characters, 4+ lines beyond that.
+4. Very short lines (≤6 characters) stay on a single line — do NOT add a newline.
+5. Count Korean characters (e.g. 안녕하세요 = 5 characters), not Japanese.
 
 Do not add commentary, romanization, or notes — only the Korean translation.
 
@@ -62,7 +64,16 @@ Glossary (use these exact translations when the source matches):
 Style notes: {style_notes}
 
 Output strictly as JSON: {{"translations":[{{"id":<int>,"ko":"<korean>"}}, ...]}}.
-Include every input id exactly once. No prose outside JSON."""
+Include every input id exactly once. No prose outside JSON.
+
+Examples (study the line-break placement carefully — these are the
+expected outputs given the inputs, not extra inputs to translate):
+
+Input:  [{{"id":0,"ja":"ありがとう"}},{{"id":1,"ja":"今日は本当にお疲れ様でした"}},{{"id":2,"ja":"明日の朝早く必ず連絡してください"}},{{"id":3,"ja":"うん"}}]
+Output: {{"translations":[{{"id":0,"ko":"고마워"}},{{"id":1,"ko":"오늘 정말\\n수고하셨어요"}},{{"id":2,"ko":"내일 아침\\n일찍 꼭\\n연락해주세요"}},{{"id":3,"ko":"응"}}]}}
+
+Input:  [{{"id":0,"ja":"何だこいつ"}},{{"id":1,"ja":"そんなはずがないだろう"}},{{"id":2,"ja":"待ってくれ俺の話を聞いてくれよ頼むから"}}]
+Output: {{"translations":[{{"id":0,"ko":"뭐야 이 녀석"}},{{"id":1,"ko":"그럴 리가\\n없잖아"}},{{"id":2,"ko":"기다려 줘\\n내 얘기 좀\\n들어줘 제발"}}]}}"""
 
 
 def build_system_prompt(glossary: str, style: str) -> str:
