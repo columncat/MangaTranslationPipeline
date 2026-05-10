@@ -480,6 +480,13 @@ class MainWindow(QMainWindow):
                 return
         if phase == PHASE_TRANSLATE and not self._ensure_embedded_weights():
             return
+        # Jump to the destination tab as soon as the user clicks, so
+        # progress / partial OCR overlays show up where they expect
+        # to see the result, instead of waiting for phase_finished.
+        if phase == PHASE_DETECT:
+            self.tabs.setCurrentIndex(1)
+        elif phase == PHASE_TRANSLATE:
+            self.tabs.setCurrentIndex(2)
         self._launch_thread(phase=phase)
 
     def _on_run_all(self) -> None:
@@ -494,6 +501,10 @@ class MainWindow(QMainWindow):
                 return
         if not self._ensure_embedded_weights():
             return
+        # Run All ends in Translate; show the Detect tab first so the
+        # user watches detection happen, then phase_finished switches
+        # to Translate when the second phase begins.
+        self.tabs.setCurrentIndex(1)
         self._launch_thread(all_phases=True)
 
     def _on_render(self) -> None:
@@ -509,6 +520,8 @@ class MainWindow(QMainWindow):
                 tr("dialog.nothing_to_render_body"),
             )
             return
+        # Re-render lands on the Translate tab where the final image lives.
+        self.tabs.setCurrentIndex(2)
         self._launch_thread(step=5)
 
     def _on_queue_process(self, paths: list, phases_label: str) -> None:
