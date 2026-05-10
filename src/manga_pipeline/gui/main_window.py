@@ -34,6 +34,7 @@ from .side_panel import SidePanel
 from .tabs import DetectTab, SourceTab, TranslateTab
 from .workers import (
     PHASE_DETECT,
+    PHASE_RENDER,
     PHASE_TRANSLATE,
     PipelineThread,
     PipelineWorker,
@@ -417,6 +418,9 @@ class MainWindow(QMainWindow):
             self._queue_target_tab = 1
         elif phases_label == "translate":
             phases = (PHASE_TRANSLATE,)
+            self._queue_target_tab = 2
+        elif phases_label == "render":
+            phases = (PHASE_RENDER,)
             self._queue_target_tab = 2
         else:
             phases = (PHASE_DETECT, PHASE_TRANSLATE)

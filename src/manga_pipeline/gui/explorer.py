@@ -146,10 +146,20 @@ class ExplorerPanel(QWidget):
         h3.addWidget(run_all_btn, 1)
         ql.addLayout(h3)
 
+        # Step-5-only batch re-render. Useful after editing translations
+        # or text positions on multiple images and wanting to bake the
+        # changes into the final PNGs without re-running OCR / translation.
+        h4 = QHBoxLayout()
+        render_btn = QPushButton(tr("explorer.render"))
+        render_btn.setToolTip(tr("explorer.render_tip"))
+        render_btn.clicked.connect(lambda: self._on_process_queue("render"))
+        h4.addWidget(render_btn, 1)
+
         save_all_btn = QPushButton(tr("explorer.save_all"))
         save_all_btn.setToolTip(tr("explorer.save_all_tip"))
         save_all_btn.clicked.connect(self._on_save_all)
-        ql.addWidget(save_all_btn)
+        h4.addWidget(save_all_btn, 2)
+        ql.addLayout(h4)
 
         splitter.addWidget(queue_box)
         splitter.setSizes([400, 320])
