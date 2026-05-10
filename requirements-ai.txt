@@ -1,3 +1,5 @@
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
+
 # Optional AI backends. Pick the lines for backends you want.
 # These are NOT installed by `pip install -r requirements.txt`.
 
@@ -6,12 +8,14 @@
 openai>=1.30
 
 # Google Gemini
+websockets==16.0
 google-genai>=0.4
 
 # llama.cpp direct GGUF load. The CPU wheel installs out of the box;
 # for GPU acceleration use one of the prebuilt CUDA / Metal wheel
 # indexes (see https://abetlen.github.io/llama-cpp-python/whl/ ).
-llama-cpp-python>=0.2.90
+llama-cpp-python
+# pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
 
 # Ollama uses plain HTTP via `requests`, which is already in the base
 # requirements file — no extra package needed here.

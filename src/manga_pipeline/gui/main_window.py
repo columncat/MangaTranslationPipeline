@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from .. import persistence
 from ..config import AppConfig
 from ..device import auto_device
+from ..history import HistoryManager
 from ..i18n import set_language, tr
 from ..models import BBox, PageContext, TranslationResult
 from ..utils.fonts import find_default_font
@@ -28,6 +29,7 @@ from ..ai import AIProvider
 from ..utils.secrets import get_api_key
 from .dialogs import TranslationEditDialog
 from .explorer import ExplorerPanel
+from .history_dock import HistoryDock
 from .language_dialog import LanguageDialog
 from .mask_editor import MaskEditorDialog
 from .save_all_dialog import SaveAllProgressDialog
@@ -60,6 +62,13 @@ class MainWindow(QMainWindow):
         self._source_path: Optional[Path] = None
         self.worker = PipelineWorker()
         self._thread: Optional[QThread] = None
+        # Per-image undo / redo. Reset in _load_image_path so each image
+        # gets a fresh timeline rooted at its persisted state.
+        self.history = HistoryManager()
+        # Set to True while history.undo / .redo is restoring state, so
+        # the various editing handlers (which would otherwise try to
+        # record a fresh entry on every model change) skip recording.
+        self._restoring_history = False
         # While True, _load_image_path skips its auto-save step. Queue runs
         # set this so the worker's per-step save_fn writes are not clobbered
         # by the main window auto-saving stale ``self.ctx`` snapshots when
@@ -73,6 +82,7 @@ class MainWindow(QMainWindow):
         self._build_tabs()
         self._build_explorer()
         self._build_side_panel()
+        self._build_history_dock()
         self._build_toolbar()
         self._build_status_bar()
         self._wire_signals()
@@ -145,6 +155,25 @@ class MainWindow(QMainWindow):
             )
         )
 
+    def _build_history_dock(self) -> None:
+        self.history_dock = HistoryDock()
+        self.history_dock.set_manager(self.history)
+        dock = QDockWidget(tr("history.title"), self)
+        dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        dock.setWidget(self.history_dock)
+        # Tab the history dock with the settings dock on the right side
+        # so users can flip between them without losing screen real estate.
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        # Keep a reference so we can find/raise the dock if the user
+        # closes it inadvertently.
+        self._history_dock_widget = dock
+
+        self.history_dock.undo_requested.connect(self._on_undo)
+        self.history_dock.redo_requested.connect(self._on_redo)
+        self.history_dock.jump_requested.connect(self._on_history_jump)
+
     def _build_toolbar(self) -> None:
         tb = QToolBar("Main", self)
         tb.setMovable(False)
@@ -159,6 +188,24 @@ class MainWindow(QMainWindow):
         save_act.setShortcut(QKeySequence.StandardKey.Save)
         save_act.triggered.connect(self._on_save)
         tb.addAction(save_act)
+
+        tb.addSeparator()
+
+        # Undo / Redo. Save references on the window so we can
+        # enable / disable them whenever the history changes.
+        self.undo_act = QAction(tr("toolbar.undo"), self)
+        self.undo_act.setShortcut(QKeySequence.StandardKey.Undo)  # Ctrl+Z
+        self.undo_act.triggered.connect(self._on_undo)
+        self.undo_act.setEnabled(False)
+        tb.addAction(self.undo_act)
+
+        self.redo_act = QAction(tr("toolbar.redo"), self)
+        # Ctrl+Y for the Windows-style redo, plus Ctrl+Shift+Z as a
+        # secondary so muscle-memory from Photoshop / Linux apps works too.
+        self.redo_act.setShortcuts([QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z")])
+        self.redo_act.triggered.connect(self._on_redo)
+        self.redo_act.setEnabled(False)
+        tb.addAction(self.redo_act)
 
         tb.addSeparator()
 
@@ -251,6 +298,9 @@ class MainWindow(QMainWindow):
         self.ctx = ctx
         self._source_path = path
         self._refresh_tabs(ctx)
+        # Seed a fresh undo history rooted at the persisted state.
+        self.history.reset(ctx, label=tr("history.label.loaded", name=path.name))
+        self._refresh_history_ui()
 
         if ctx.final is not None or ctx.translations:
             target = 2
@@ -606,6 +656,18 @@ class MainWindow(QMainWindow):
                 persistence.save_context(self.ctx, self._source_path)
             except Exception:  # noqa: BLE001
                 pass
+        # Single-image phase runs become history entries so undo can roll
+        # back past a Detect / Translate / Render execution. Skip while a
+        # queue is running because each queued item triggers its own
+        # phase_finished events that are not relevant to the active doc.
+        if ok and not self._queue_active and self.ctx is not None:
+            label_key = {
+                PHASE_DETECT: "history.label.detect",
+                PHASE_TRANSLATE: "history.label.translate",
+                PHASE_RENDER: "history.label.render",
+            }.get(phase)
+            if label_key:
+                self._record_history(tr(label_key))
 
     # ---- queue ----
 
@@ -678,6 +740,7 @@ class MainWindow(QMainWindow):
             tr("status.bbox_changed", idx=idx, x=x, y=y, w=w, h=h),
             5000,
         )
+        self._record_history(tr("history.label.bbox_moved", idx=idx))
         self._auto_save_metadata()
 
     def _on_bbox_add(self) -> None:
@@ -698,6 +761,7 @@ class MainWindow(QMainWindow):
             tr("status.bbox_added", x=x, y=y, w=bw, h=bh),
             6000,
         )
+        self._record_history(tr("history.label.bbox_added"))
         self._auto_save_metadata()
 
     def _on_text_offset_changed(self, idx: int, ox: int, oy: int) -> None:
@@ -711,6 +775,7 @@ class MainWindow(QMainWindow):
             tr("status.translation_offset", idx=idx, ox=ox, oy=oy),
             5000,
         )
+        self._record_history(tr("history.label.text_moved", idx=idx))
         self._auto_save_metadata()
 
     def _auto_save_metadata(self) -> None:
@@ -738,6 +803,8 @@ class MainWindow(QMainWindow):
         if self.ctx.translations:
             msg += tr("status.bbox_deleted_render_hint")
         self.status_bar.showMessage(msg, 6000)
+        self._record_history(tr("history.label.bbox_deleted", idx=idx))
+        self._auto_save_metadata()
 
     def _on_edit_bbox_mask(self, idx: int) -> None:
         """Open the per-bbox mask editor and write the result back.
@@ -787,6 +854,7 @@ class MainWindow(QMainWindow):
             self.ctx.cleaned = None
             self.ctx.final = None
             self._refresh_tabs(self.ctx)
+            self._record_history(tr("history.label.mask_edited", idx=idx))
             self._auto_save_metadata()
             # Rebuild final immediately so the user sees the new inpaint.
             self._launch_thread(step=5)
@@ -830,7 +898,13 @@ class MainWindow(QMainWindow):
         self.ctx.final = None
         new_idx = len(self.ctx.translations) - 1
         self._refresh_tabs(self.ctx)
+        # Snapshot the bbox-add itself so cancelling the edit dialog
+        # below still leaves an undoable trail.
+        self._record_history(tr("history.label.text_added"))
+        self._auto_save_metadata()
         # Open the edit dialog right away so the user can type the text.
+        # If they save changes there, _on_translation_edit records its
+        # own snapshot.
         self._on_translation_edit(new_idx)
 
     def _on_translation_edit(self, idx: int) -> None:
@@ -890,7 +964,92 @@ class MainWindow(QMainWindow):
                 tr_item.bg_fill_pad = dlg.bg_fill_pad
                 self.ctx.final = None
                 self._refresh_tabs(self.ctx)
+                self._record_history(tr("history.label.translation_edited", idx=idx))
                 self._launch_thread(step=5)
+
+    # ----------------------------------------------------------------- history
+
+    def _record_history(self, label: str) -> None:
+        """Snapshot the current ctx into the undo stack.
+
+        Skipped while a queue is running (queue edits aren't user
+        actions on the displayed page) or while we're in the middle of
+        applying an undo/redo (otherwise undo would clear redo).
+        """
+        if self.ctx is None:
+            return
+        if self._queue_active or self._restoring_history:
+            return
+        self.history.record(self.ctx, label)
+        self._refresh_history_ui()
+
+    def _refresh_history_ui(self) -> None:
+        self.history_dock.refresh()
+        self.undo_act.setEnabled(self.history.can_undo())
+        self.redo_act.setEnabled(self.history.can_redo())
+
+    def _on_undo(self) -> None:
+        if self.ctx is None or not self.history.can_undo():
+            return
+        self._restoring_history = True
+        try:
+            entry = self.history.undo(self.ctx)
+        finally:
+            self._restoring_history = False
+        if entry is None:
+            return
+        self._refresh_tabs(self.ctx)
+        self._refresh_history_ui()
+        self._auto_save_metadata()
+        self.status_bar.showMessage(
+            tr("status.undo", label=entry.label), 4000
+        )
+
+    def _on_redo(self) -> None:
+        if self.ctx is None or not self.history.can_redo():
+            return
+        self._restoring_history = True
+        try:
+            entry = self.history.redo(self.ctx)
+        finally:
+            self._restoring_history = False
+        if entry is None:
+            return
+        self._refresh_tabs(self.ctx)
+        self._refresh_history_ui()
+        self._auto_save_metadata()
+        self.status_bar.showMessage(
+            tr("status.redo", label=entry.label), 4000
+        )
+
+    def _on_history_jump(self, target_idx: int) -> None:
+        """Step through undo / redo until the dock-clicked entry is current.
+
+        Bounded by ``HistoryManager.entries()``; ignored when the doc
+        is empty or while a queue is running.
+        """
+        if self.ctx is None or self._queue_active:
+            return
+        steps = target_idx - self.history.current_index
+        if steps == 0:
+            return
+        self._restoring_history = True
+        try:
+            if steps < 0:
+                for _ in range(-steps):
+                    if not self.history.can_undo():
+                        break
+                    self.history.undo(self.ctx)
+            else:
+                for _ in range(steps):
+                    if not self.history.can_redo():
+                        break
+                    self.history.redo(self.ctx)
+        finally:
+            self._restoring_history = False
+        self._refresh_tabs(self.ctx)
+        self._refresh_history_ui()
+        self._auto_save_metadata()
 
     # ----------------------------------------------------------------- refresh
 
