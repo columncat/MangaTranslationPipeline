@@ -134,6 +134,26 @@ class OpenAICompatTranslator:
             return "text"
         return str(fmt.get("type", "text"))
 
+    @staticmethod
+    def _extract_message_text(message) -> str:
+        """Read the assistant text from a chat completion message.
+
+        Reasoning models (Qwen3, DeepSeek-R1, OpenAI o1/o3, …) often put
+        their final JSON in ``reasoning_content`` and leave the standard
+        ``content`` field empty. We treat both fields as candidate outputs
+        and concatenate so the JSON parser downstream sees the full text.
+        """
+        content = getattr(message, "content", None) or ""
+        reasoning = getattr(message, "reasoning_content", None)
+        if reasoning is None:
+            # Some SDKs only expose non-standard fields via model_extra.
+            extra = getattr(message, "model_extra", None) or {}
+            reasoning = extra.get("reasoning_content")
+        reasoning = reasoning or ""
+        if content and reasoning:
+            return f"{content}\n{reasoning}"
+        return content or reasoning
+
     def _chat(self, system: str, user: str, max_tokens: int) -> str:
         common: dict = {
             "model": self._model,
@@ -158,8 +178,7 @@ class OpenAICompatTranslator:
                 raise
             # Success — remember the working format for next time.
             self._chosen_format = self._format_label(fmt)
-            choice = resp.choices[0]
-            return choice.message.content or ""
+            return self._extract_message_text(resp.choices[0].message)
 
         # Every format we know of was rejected — surface the last error.
         assert last_exc is not None
