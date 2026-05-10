@@ -21,7 +21,7 @@ from .. import persistence
 from ..config import AppConfig
 from ..device import auto_device
 from ..i18n import set_language, tr
-from ..models import BBox, PageContext
+from ..models import BBox, PageContext, TranslationResult
 from ..utils.fonts import find_default_font
 from ..utils.image_io import load_rgb, save_image
 from ..utils.secrets import get_anthropic_key
@@ -103,6 +103,7 @@ class MainWindow(QMainWindow):
         self.translate_tab.translation_edit_requested.connect(self._on_translation_edit)
         self.translate_tab.text_offset_changed.connect(self._on_text_offset_changed)
         self.translate_tab.render_requested.connect(self._on_render)
+        self.translate_tab.add_text_requested.connect(self._on_add_translation_text)
 
     def _build_explorer(self) -> None:
         self.explorer = ExplorerPanel()
@@ -698,6 +699,48 @@ class MainWindow(QMainWindow):
         if self.ctx.translations:
             msg += tr("status.bbox_deleted_render_hint")
         self.status_bar.showMessage(msg, 6000)
+
+    def _on_add_translation_text(self) -> None:
+        """Insert a fresh user-authored text bubble into the page.
+
+        Adds a default-sized bbox at the image center plus an empty
+        TranslationResult tied to it, then opens the edit dialog so the
+        user can type the text immediately. After the dialog closes the
+        page re-renders with the new bubble in place. The user can then
+        switch on Move-Text to drag the bubble to its final position.
+        """
+        if self.ctx is None or self.ctx.source is None:
+            QMessageBox.information(
+                self, tr("dialog.no_image_title"), tr("dialog.no_image_body")
+            )
+            return
+        # If there are no existing translations and no cleaned image, the
+        # user hasn't run Translate yet. We still allow the action — the
+        # renderer will inpaint Step-1 mask intersections with the new
+        # bbox, but if there's no mask either we'll just paint on top of
+        # the source. The user can adjust manually from there.
+        h, w = self.ctx.source.shape[:2]
+        bw = min(200, max(40, w // 4))
+        bh = min(80, max(20, h // 8))
+        x = max(0, (w - bw) // 2)
+        y = max(0, (h - bh) // 2)
+        bbox = BBox(x=x, y=y, w=bw, h=bh, area=bw * bh)
+        self.ctx.bboxes.append(bbox)
+        # An empty text_ja keeps Step 4 from re-translating it later if
+        # the user runs Translate again — empty Japanese is a clear marker
+        # of "this is a user-authored bubble, not OCR output".
+        new_tr = TranslationResult(
+            bbox=bbox,
+            text_ja="",
+            text_ko="",
+        )
+        self.ctx.translations.append(new_tr)
+        # Force final to be regenerated when the user re-renders.
+        self.ctx.final = None
+        new_idx = len(self.ctx.translations) - 1
+        self._refresh_tabs(self.ctx)
+        # Open the edit dialog right away so the user can type the text.
+        self._on_translation_edit(new_idx)
 
     def _on_translation_edit(self, idx: int) -> None:
         if self.ctx is None or idx < 0 or idx >= len(self.ctx.translations):

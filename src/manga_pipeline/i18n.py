@@ -187,6 +187,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "tabs.translate.hide_tip": "Show cleaned image without rendered translations",
         "tabs.translate.move_text": "Move Text",
         "tabs.translate.move_tip": "Drag dialogue text to reposition without moving its bbox.\nPress Render after moving to update the final image.",
+        "tabs.translate.add_text": "Add Text",
+        "tabs.translate.add_text_tip": "Insert a new dialogue bubble at the image center, then opens the edit dialog so you can type its content.",
         # edit translation dialog
         "edit.title": "Edit translation",
         "edit.ja_label": "Japanese (original):",
@@ -369,6 +371,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "tabs.translate.hide_tip": "렌더된 번역 없이 정리된 이미지만 표시",
         "tabs.translate.move_text": "텍스트 이동",
         "tabs.translate.move_tip": "Bbox는 그대로 두고 대사 텍스트만 드래그로 위치 조정.\n이동 후 렌더를 눌러 최종 이미지를 갱신하세요.",
+        "tabs.translate.add_text": "텍스트 추가",
+        "tabs.translate.add_text_tip": "이미지 중앙에 새 대사 박스를 만들고 편집 창을 띄워 내용을 입력합니다.",
         "edit.title": "번역 편집",
         "edit.ja_label": "일본어 (원본):",
         "edit.ko_label": "한국어 (Ctrl+Enter로 확인):",

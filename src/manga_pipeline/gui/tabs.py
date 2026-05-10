@@ -184,6 +184,9 @@ class TranslateTab(PhaseTabWidget):
     # re-run Step 5 to bake in any text positions that were dragged while
     # the mode was active.
     render_requested = Signal()
+    # User clicked "Add text" — main window should create a new bbox
+    # plus a TranslationResult and open the edit dialog.
+    add_text_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(phase="translate", title=tr("tabs.title.translate"), parent=parent)
@@ -211,6 +214,12 @@ class TranslateTab(PhaseTabWidget):
         self.move_text_button.setToolTip(tr("tabs.translate.move_tip"))
         self.move_text_button.toggled.connect(self._on_toggle_move_text)
         self._toolbar_layout.insertWidget(4, self.move_text_button)
+
+        # New: insert a free-floating text bubble that wasn't auto-detected.
+        self.add_text_button = QPushButton(tr("tabs.translate.add_text"))
+        self.add_text_button.setToolTip(tr("tabs.translate.add_text_tip"))
+        self.add_text_button.clicked.connect(self.add_text_requested.emit)
+        self._toolbar_layout.insertWidget(5, self.add_text_button)
 
         self._default_font_path: Optional[str] = None
         self._default_font_pt: int = 36
