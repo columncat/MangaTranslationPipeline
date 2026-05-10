@@ -7,9 +7,7 @@
 
 ## 시연 영상 / Demo
 
-<!-- 시연 영상이 준비되면 아래 주석을 해제하고 YOUR_VIDEO_ID 자리를 채우세요. -->
-<!-- [![Demo](https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://youtu.be/YOUR_VIDEO_ID) -->
-
+[![Demo](https://img.youtube.com/vi/xNEkKBk1e8A/maxresdefault.jpg)](https://youtu.be/xNEkKBk1e8A)
 > 시연 영상 속 만화 페이지는 *Manga109-s* 데이터셋의 작품을 사용했습니다.  
 > Manga pages shown in the demo are **Courtesy of NAOKO ETO, Manga109-s**.
 
