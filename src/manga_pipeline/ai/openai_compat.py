@@ -5,12 +5,21 @@ OpenAI itself, OpenRouter, vLLM with the OpenAI server, LM Studio, and
 many other inference servers. The user picks the model and (optional)
 base URL from the GUI.
 
-Uses the official ``openai`` Python SDK; if it's not installed we raise
-:class:`BackendUnavailable` with an actionable message.
+Different servers accept different ``response_format`` shapes:
+
+- OpenAI proper / vLLM: ``{"type": "json_object"}`` works.
+- LM Studio: only ``{"type": "json_schema", ...}`` or ``{"type": "text"}``
+  are accepted; ``json_object`` is rejected with a 400.
+- llama.cpp server, KoboldCpp, etc.: usually ignore ``response_format``
+  entirely.
+
+We try the formats in order of preference and remember which one this
+endpoint accepts so follow-up calls skip the failed attempts.
 """
 from __future__ import annotations
 
 import json
+from typing import Optional
 
 from .base import (
     BackendUnavailable,
@@ -18,6 +27,53 @@ from .base import (
     build_system_prompt,
     parse_batch_response,
 )
+
+
+# JSON Schema describing the system-prompt's required output shape. Used
+# whenever the server accepts ``response_format=json_schema`` (LM Studio,
+# new OpenAI structured-outputs, etc.).
+_TRANSLATIONS_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "translations",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "translations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "ko": {"type": "string"},
+                        },
+                        "required": ["id", "ko"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["translations"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def _looks_like_response_format_error(exc: Exception) -> bool:
+    """Heuristic: did the server reject our response_format hint?
+
+    We treat any 400-level error whose message mentions response_format
+    or one of its option keywords as "format unsupported, try the next
+    one" rather than a real failure.
+    """
+    msg = str(exc).lower()
+    if "response_format" in msg or "response format" in msg:
+        return True
+    # LM Studio's exact wording: "'response_format.type' must be 'json_schema' or 'text'"
+    if "json_schema" in msg or "json_object" in msg:
+        return True
+    return False
 
 
 class OpenAICompatTranslator:
@@ -40,6 +96,11 @@ class OpenAICompatTranslator:
         self._client = OpenAI(**kwargs)
         self._model = cfg.model
         self._max_tokens = cfg.max_tokens
+        # Remember the first response_format that this endpoint accepted
+        # so we don't re-pay the trial-and-error cost on every batch.
+        # Values: None = not yet tried, "json_object", "json_schema",
+        # "text" (== drop the hint entirely).
+        self._chosen_format: Optional[str] = None
 
     def translate_batch(
         self,
@@ -55,21 +116,54 @@ class OpenAICompatTranslator:
                 out[i] = self._single_call(lines[i], glossary, style)
         return out
 
+    # ---- inference ----
+
+    def _format_options_to_try(self) -> list[Optional[dict]]:
+        """Return the list of response_format dicts to attempt this call."""
+        if self._chosen_format == "json_object":
+            return [{"type": "json_object"}]
+        if self._chosen_format == "json_schema":
+            return [_TRANSLATIONS_SCHEMA]
+        if self._chosen_format == "text":
+            return [None]
+        # Not yet calibrated — try json_object → json_schema → no hint.
+        return [{"type": "json_object"}, _TRANSLATIONS_SCHEMA, None]
+
+    def _format_label(self, fmt: Optional[dict]) -> str:
+        if fmt is None:
+            return "text"
+        return str(fmt.get("type", "text"))
+
     def _chat(self, system: str, user: str, max_tokens: int) -> str:
-        resp = self._client.chat.completions.create(
-            model=self._model,
-            max_tokens=max_tokens,
-            messages=[
+        common: dict = {
+            "model": self._model,
+            "max_tokens": max_tokens,
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            # ``response_format=json_object`` is supported by GPT-4 family
-            # and some OSS models; for those that ignore it the parser
-            # still copes thanks to the JSON-extraction fallback in base.
-            response_format={"type": "json_object"},
-        )
-        choice = resp.choices[0]
-        return choice.message.content or ""
+        }
+
+        last_exc: Optional[Exception] = None
+        for fmt in self._format_options_to_try():
+            kwargs = dict(common)
+            if fmt is not None:
+                kwargs["response_format"] = fmt
+            try:
+                resp = self._client.chat.completions.create(**kwargs)
+            except Exception as e:  # noqa: BLE001
+                if _looks_like_response_format_error(e):
+                    last_exc = e
+                    continue
+                raise
+            # Success — remember the working format for next time.
+            self._chosen_format = self._format_label(fmt)
+            choice = resp.choices[0]
+            return choice.message.content or ""
+
+        # Every format we know of was rejected — surface the last error.
+        assert last_exc is not None
+        raise last_exc
 
     def _batch_call(
         self, lines: list[str], glossary: str, style: str
