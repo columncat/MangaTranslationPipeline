@@ -859,19 +859,19 @@ class MainWindow(QMainWindow):
     def _on_edit_bbox_mask(self, idx: int) -> None:
         """Open the per-bbox mask editor and write the result back.
 
-        The crop is taken from the cleaned image when present (so the user
-        sees what's already been inpainted) and otherwise from the source.
-        Cancelling leaves the existing mask untouched; clicking Reset
-        removes the per-bbox mask so Step 5 falls back to the rectangle.
+        The crop is always taken from the *source* image so the user can
+        see the original text they're masking around (the cleaned image
+        already has the text removed, which makes painting around it
+        much harder). Cancelling leaves the existing mask untouched;
+        clicking Reset removes the per-bbox mask so Step 5 falls back
+        to the rectangle.
         """
         if self.ctx is None or idx < 0 or idx >= len(self.ctx.translations):
             return
         tr_item = self.ctx.translations[idx]
         bbox = tr_item.bbox
 
-        base_img = (
-            self.ctx.source if self.ctx.cleaned is None else self.ctx.cleaned
-        )
+        base_img = self.ctx.source
         if base_img is None:
             QMessageBox.information(
                 self, tr("dialog.no_image_title"), tr("dialog.no_image_body")
@@ -884,18 +884,22 @@ class MainWindow(QMainWindow):
             return
         crop = base_img[y0:y1, x0:x1].copy()
 
-        # Pre-fill the editor with whichever of these is most useful:
-        # 1) the existing per-bbox mask if any
-        # 2) otherwise the global text mask cropped to this bbox (if Step 1
-        #    detected something inside the bbox), so the user starts with
-        #    "what the auto-detector thought" and tweaks from there.
-        initial = None
+        # Pre-fill the editor: if the user has an existing per-bbox mask
+        # we continue from that, otherwise start with the entire bbox
+        # painted — this matches the renderer's default behaviour when
+        # bbox_mask is None (whole rectangle inpainted) and makes the
+        # erase-to-carve workflow the natural one (right-drag to free
+        # the regions the user wants to keep untouched).
+        crop_h = y1 - y0
+        crop_w = x1 - x0
         if tr_item.bbox_mask is not None and tr_item.bbox_mask.shape[:2] == (
             bbox.h, bbox.w,
         ):
             initial = tr_item.bbox_mask
-        elif self.ctx.mask is not None and self.ctx.mask.shape[:2] == (h, w):
-            initial = self.ctx.mask[y0:y1, x0:x1].copy()
+        else:
+            import numpy as np
+
+            initial = np.full((crop_h, crop_w), 255, dtype=np.uint8)
 
         dlg = MaskEditorDialog(crop_rgb=crop, initial_mask=initial, parent=self)
         if dlg.exec():
