@@ -101,7 +101,8 @@ class TranslationEditDialog(QDialog):
       - Alignment radio (left / center / right)
       - Rotation spinbox in degrees
       - Text fill / stroke colour swatches (per-dialogue overrides)
-      - Optional ellipse background fill with its own colour and padding
+      - Optional rectangular text-background panel with fill colour,
+        padding, border on/off, border colour, and border width
     """
 
     def __init__(
@@ -117,6 +118,9 @@ class TranslationEditDialog(QDialog):
         bg_fill_enabled: bool = False,
         bg_fill_rgb: tuple[int, int, int] = (255, 255, 255),
         bg_fill_pad: int = 6,
+        bg_border_enabled: bool = False,
+        bg_border_rgb: tuple[int, int, int] = (0, 0, 0),
+        bg_border_px: int = 2,
         available_fonts: Optional[Sequence[str]] = None,
         default_font_pt: int = 36,
         default_fill_rgb: tuple[int, int, int] = (0, 0, 0),
@@ -125,7 +129,7 @@ class TranslationEditDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle(tr("edit.title"))
-        self.setMinimumSize(520, 480)
+        self.setMinimumSize(540, 540)
 
         layout = QVBoxLayout(self)
 
@@ -236,35 +240,67 @@ class TranslationEditDialog(QDialog):
         stroke_wrap.setLayout(stroke_row)
         overrides.addRow(tr("edit.stroke_color"), stroke_wrap)
 
-        # ----- Background fill (ellipse) -----
-        self.bg_check = QCheckBox(tr("edit.bg_fill"))
-        self.bg_check.setChecked(bool(bg_fill_enabled))
-        self.bg_check.setToolTip(tr("edit.bg_fill_tip"))
-        overrides.addRow("", self.bg_check)
-
-        self.bg_swatch = _ColorSwatchButton(bg_fill_rgb, default_rgb=(255, 255, 255))
+        # ----- Background panel (rectangle) -----
+        # Padding is always meaningful (it sets the rectangle size
+        # relative to the text bounds) so it lives outside the
+        # fill/border on/off toggles.
         self.bg_pad_box = QSpinBox()
         self.bg_pad_box.setRange(0, 80)
         self.bg_pad_box.setSuffix(" px")
         self.bg_pad_box.setValue(int(bg_fill_pad))
+        self.bg_pad_box.setToolTip(tr("edit.bg_fill_pad_tip"))
+        overrides.addRow(tr("edit.bg_fill_pad"), self.bg_pad_box)
+
+        # Fill row: checkbox + colour swatch.
+        self.bg_check = QCheckBox(tr("edit.bg_fill"))
+        self.bg_check.setChecked(bool(bg_fill_enabled))
+        self.bg_check.setToolTip(tr("edit.bg_fill_tip"))
+        self.bg_swatch = _ColorSwatchButton(bg_fill_rgb, default_rgb=(255, 255, 255))
         bg_row = QHBoxLayout()
-        bg_row.addWidget(self.bg_swatch)
+        bg_row.addWidget(self.bg_check)
         bg_row.addSpacing(6)
-        bg_row.addWidget(QLabel(tr("edit.bg_fill_pad")))
-        bg_row.addWidget(self.bg_pad_box)
+        bg_row.addWidget(self.bg_swatch)
         bg_row.addStretch(1)
         bg_wrap = QWidget()
         bg_wrap.setLayout(bg_row)
         overrides.addRow("", bg_wrap)
 
-        # Disable the bg colour/pad widgets when the checkbox is off so it's
-        # obvious that they're not in effect.
-        def _sync_bg_enabled(state: bool) -> None:
-            self.bg_swatch.setEnabled(state)
-            self.bg_pad_box.setEnabled(state)
+        # Border row: checkbox + colour swatch + width spinbox.
+        self.border_check = QCheckBox(tr("edit.bg_border"))
+        self.border_check.setChecked(bool(bg_border_enabled))
+        self.border_check.setToolTip(tr("edit.bg_border_tip"))
+        self.border_swatch = _ColorSwatchButton(
+            bg_border_rgb, default_rgb=(0, 0, 0)
+        )
+        self.border_px_box = QSpinBox()
+        self.border_px_box.setRange(1, 30)
+        self.border_px_box.setSuffix(" px")
+        self.border_px_box.setValue(max(1, int(bg_border_px)))
+        border_row = QHBoxLayout()
+        border_row.addWidget(self.border_check)
+        border_row.addSpacing(6)
+        border_row.addWidget(self.border_swatch)
+        border_row.addSpacing(6)
+        border_row.addWidget(QLabel(tr("edit.bg_border_width")))
+        border_row.addWidget(self.border_px_box)
+        border_row.addStretch(1)
+        border_wrap = QWidget()
+        border_wrap.setLayout(border_row)
+        overrides.addRow("", border_wrap)
 
-        self.bg_check.toggled.connect(_sync_bg_enabled)
-        _sync_bg_enabled(self.bg_check.isChecked())
+        # Grey out colour / width controls when their toggle is off so
+        # it's obvious which group is active.
+        def _sync_fill_enabled(state: bool) -> None:
+            self.bg_swatch.setEnabled(state)
+
+        def _sync_border_enabled(state: bool) -> None:
+            self.border_swatch.setEnabled(state)
+            self.border_px_box.setEnabled(state)
+
+        self.bg_check.toggled.connect(_sync_fill_enabled)
+        self.border_check.toggled.connect(_sync_border_enabled)
+        _sync_fill_enabled(self.bg_check.isChecked())
+        _sync_border_enabled(self.border_check.isChecked())
 
         layout.addLayout(overrides)
 
@@ -329,3 +365,15 @@ class TranslationEditDialog(QDialog):
     @property
     def bg_fill_pad(self) -> int:
         return int(self.bg_pad_box.value())
+
+    @property
+    def bg_border_enabled(self) -> bool:
+        return self.border_check.isChecked()
+
+    @property
+    def bg_border_rgb(self) -> tuple[int, int, int]:
+        return self.border_swatch.rgb or (0, 0, 0)
+
+    @property
+    def bg_border_px(self) -> int:
+        return int(self.border_px_box.value())

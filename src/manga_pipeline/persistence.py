@@ -104,6 +104,9 @@ def save_context(ctx: PageContext, source_path: Path) -> Path:
                 "bg_fill_enabled": bool(getattr(t, "bg_fill_enabled", False)),
                 "bg_fill_rgb": list(getattr(t, "bg_fill_rgb", (255, 255, 255))),
                 "bg_fill_pad": int(getattr(t, "bg_fill_pad", 6)),
+                "bg_border_enabled": bool(getattr(t, "bg_border_enabled", False)),
+                "bg_border_rgb": list(getattr(t, "bg_border_rgb", (0, 0, 0))),
+                "bg_border_px": int(getattr(t, "bg_border_px", 2)),
             }
             for t in ctx.translations
             if id(t.bbox) in bbox_idx
@@ -179,6 +182,7 @@ def load_context(source_path: Path) -> Optional[PageContext]:
             fill_raw = t.get("fill_rgb")
             stroke_raw = t.get("stroke_rgb")
             bg_raw = t.get("bg_fill_rgb", [255, 255, 255])
+            border_raw = t.get("bg_border_rgb", [0, 0, 0])
             # Per-bbox mask sidecar: <stem>_bboxmask_<idx>.png. Loaded as
             # uint8 grayscale; if shape doesn't match the bbox we drop it
             # rather than risk a misaligned inpaint.
@@ -204,6 +208,9 @@ def load_context(source_path: Path) -> Optional[PageContext]:
                     bg_fill_enabled=bool(t.get("bg_fill_enabled", False)),
                     bg_fill_rgb=tuple(bg_raw) if bg_raw else (255, 255, 255),
                     bg_fill_pad=int(t.get("bg_fill_pad", 6) or 6),
+                    bg_border_enabled=bool(t.get("bg_border_enabled", False)),
+                    bg_border_rgb=tuple(border_raw) if border_raw else (0, 0, 0),
+                    bg_border_px=int(t.get("bg_border_px", 2) or 2),
                     bbox_mask=bm,
                 )
             )

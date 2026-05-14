@@ -977,6 +977,9 @@ class MainWindow(QMainWindow):
             bg_fill_enabled=bool(getattr(tr_item, "bg_fill_enabled", False)),
             bg_fill_rgb=tuple(getattr(tr_item, "bg_fill_rgb", (255, 255, 255))),
             bg_fill_pad=int(getattr(tr_item, "bg_fill_pad", 6)),
+            bg_border_enabled=bool(getattr(tr_item, "bg_border_enabled", False)),
+            bg_border_rgb=tuple(getattr(tr_item, "bg_border_rgb", (0, 0, 0))),
+            bg_border_px=int(getattr(tr_item, "bg_border_px", 2)),
             available_fonts=self.side_panel.known_fonts,
             default_font_pt=self.config.step5.outside_pt,
             default_fill_rgb=tuple(self.config.step5.fill_rgb),
@@ -991,6 +994,9 @@ class MainWindow(QMainWindow):
             current_bg_on = bool(getattr(tr_item, "bg_fill_enabled", False))
             current_bg_rgb = tuple(getattr(tr_item, "bg_fill_rgb", (255, 255, 255)))
             current_bg_pad = int(getattr(tr_item, "bg_fill_pad", 6))
+            current_border_on = bool(getattr(tr_item, "bg_border_enabled", False))
+            current_border_rgb = tuple(getattr(tr_item, "bg_border_rgb", (0, 0, 0)))
+            current_border_px = int(getattr(tr_item, "bg_border_px", 2))
             changed = (
                 dlg.korean != tr_item.text_ko
                 or dlg.font_path != tr_item.font_path
@@ -1002,6 +1008,9 @@ class MainWindow(QMainWindow):
                 or dlg.bg_fill_enabled != current_bg_on
                 or dlg.bg_fill_rgb != current_bg_rgb
                 or dlg.bg_fill_pad != current_bg_pad
+                or dlg.bg_border_enabled != current_border_on
+                or dlg.bg_border_rgb != current_border_rgb
+                or dlg.bg_border_px != current_border_px
             )
             if changed:
                 tr_item.text_ko = dlg.korean
@@ -1016,6 +1025,9 @@ class MainWindow(QMainWindow):
                 tr_item.bg_fill_enabled = dlg.bg_fill_enabled
                 tr_item.bg_fill_rgb = dlg.bg_fill_rgb
                 tr_item.bg_fill_pad = dlg.bg_fill_pad
+                tr_item.bg_border_enabled = dlg.bg_border_enabled
+                tr_item.bg_border_rgb = dlg.bg_border_rgb
+                tr_item.bg_border_px = dlg.bg_border_px
                 self.ctx.final = None
                 self._refresh_tabs(self.ctx)
                 self._record_history(tr("history.label.translation_edited", idx=idx))

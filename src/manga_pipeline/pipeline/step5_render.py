@@ -98,6 +98,8 @@ def _render_text_block_to_buffer(
     stroke_rgb: Optional[tuple[int, int, int]] = None,
     bg_fill_rgb: Optional[tuple[int, int, int]] = None,
     bg_fill_pad: int = 6,
+    bg_border_rgb: Optional[tuple[int, int, int]] = None,
+    bg_border_px: int = 0,
 ) -> Image.Image:
     """Render multi-line text onto a transparent RGBA image.
 
@@ -106,9 +108,12 @@ def _render_text_block_to_buffer(
     Padding around the buffer prevents stroke clipping when rotated.
 
     ``fill_rgb`` / ``stroke_rgb`` override the Step5Params defaults per
-    item. ``bg_fill_rgb`` (when not None) draws an opaque ellipse behind
-    the text whose bounding box is the rendered text plus ``bg_fill_pad``
-    pixels of padding on each side.
+    item. ``bg_fill_rgb`` (when not None) draws an opaque rectangle behind
+    the text — the rectangle hugs the text's pixel bbox plus
+    ``bg_fill_pad`` pixels of padding on every side.
+    ``bg_border_rgb`` + ``bg_border_px`` (when both set) draw a rectangle
+    outline around the same area. Border can be enabled independently of
+    the fill (e.g. to draw an outline-only frame).
 
     Sizing strategy: each line's bounding box is measured with the stroke
     included via ``draw.textbbox(...)`` so that artistic fonts whose
@@ -116,7 +121,8 @@ def _render_text_block_to_buffer(
     don't get clipped on the buffer edges. The buffer is sized to the
     union of all painted ink, plus a safety margin equal to ¼ of the
     font size (covers fonts whose embellishments still escape the
-    measured bbox by a pixel or two).
+    measured bbox by a pixel or two), plus the backdrop padding and
+    border thickness so the panel never gets clipped.
     """
     measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     if not lines:
@@ -161,8 +167,13 @@ def _render_text_block_to_buffer(
     # size for artistic fonts whose ink can still graze the measured bbox.
     safety_pad = max(2, font.size // 4)
     stroke_pad = max(safety_pad, stroke_w + 2)
-    ellipse_pad = max(0, int(bg_fill_pad)) if bg_fill_rgb is not None else 0
-    pad = stroke_pad + ellipse_pad
+    # Backdrop occupies (text bbox) + bg_fill_pad on each side. Border
+    # is drawn AROUND the backdrop and grows the buffer by border width.
+    has_fill = bg_fill_rgb is not None
+    has_border = bg_border_rgb is not None and int(bg_border_px) > 0
+    panel_pad = max(0, int(bg_fill_pad)) if (has_fill or has_border) else 0
+    border_w = max(0, int(bg_border_px)) if has_border else 0
+    pad = stroke_pad + panel_pad + border_w
     buf = Image.new(
         "RGBA",
         (max(1, block_w + 2 * pad), max(1, block_h + 2 * pad)),
@@ -170,17 +181,28 @@ def _render_text_block_to_buffer(
     )
     bdraw = ImageDraw.Draw(buf)
 
-    if bg_fill_rgb is not None:
-        # Ellipse fits the text block expanded by ``ellipse_pad`` on each
-        # side. The shape is fully opaque so the dialogue reads cleanly
-        # even on busy backgrounds.
-        ex0 = stroke_pad - ellipse_pad
-        ey0 = stroke_pad - ellipse_pad
-        ex1 = stroke_pad + block_w + ellipse_pad
-        ey1 = stroke_pad + block_h + ellipse_pad
-        ex0 = max(0, ex0)
-        ey0 = max(0, ey0)
-        bdraw.ellipse((ex0, ey0, ex1, ey1), fill=(*bg_fill_rgb, 255))
+    if has_fill or has_border:
+        # Rectangle hugs the text bbox expanded by panel_pad on each
+        # side. Pillow's ``rectangle`` includes the bottom-right pixel,
+        # so subtract 1 from the bottom-right corner so the visible
+        # outline width matches ``border_w`` exactly.
+        rx0 = stroke_pad + border_w - 0
+        ry0 = stroke_pad + border_w - 0
+        rx1 = stroke_pad + border_w + 2 * panel_pad + block_w - 1
+        ry1 = stroke_pad + border_w + 2 * panel_pad + block_h - 1
+        # Re-anchor so the text still lands on its expected coordinates:
+        # text was placed at (pad + base_x, pad + i * line_advance),
+        # i.e. (stroke_pad + panel_pad + border_w + base_x, ...). The
+        # rectangle inner edge sits at stroke_pad + border_w, leaving
+        # exactly panel_pad of fill before the text starts.
+        rx0 = max(0, rx0)
+        ry0 = max(0, ry0)
+        bdraw.rectangle(
+            (rx0, ry0, rx1, ry1),
+            fill=(*bg_fill_rgb, 255) if has_fill else None,
+            outline=(*bg_border_rgb, 255) if has_border else None,
+            width=border_w if has_border else 0,
+        )
 
     for i, ln in enumerate(lines):
         bb = line_bboxes[i]
@@ -262,6 +284,13 @@ class KoreanRenderer:
                 else None
             )
             bg_pad = int(getattr(item, "bg_fill_pad", 6))
+            border_enabled = bool(getattr(item, "bg_border_enabled", False))
+            border_rgb = (
+                tuple(getattr(item, "bg_border_rgb", (0, 0, 0)))
+                if border_enabled
+                else None
+            )
+            border_px = int(getattr(item, "bg_border_px", 0))
 
             buf = _render_text_block_to_buffer(
                 lines,
@@ -272,6 +301,8 @@ class KoreanRenderer:
                 stroke_rgb=tuple(item_stroke) if item_stroke is not None else None,
                 bg_fill_rgb=bg_rgb,
                 bg_fill_pad=bg_pad,
+                bg_border_rgb=border_rgb,
+                bg_border_px=border_px,
             )
             if rotation:
                 buf = buf.rotate(

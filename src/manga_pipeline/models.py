@@ -63,13 +63,18 @@ class TranslationResult:
     # defaults (black fill, white stroke). Stored as RGB triples.
     fill_rgb: Optional[tuple[int, int, int]] = None
     stroke_rgb: Optional[tuple[int, int, int]] = None
-    # Optional ellipse drawn behind the rendered text block as a backdrop
-    # (for white text on busy art). Disabled by default.
+    # Optional rectangular backdrop drawn behind the rendered text block
+    # (helps dialogue stay legible on busy art). Disabled by default.
     bg_fill_enabled: bool = False
     bg_fill_rgb: tuple[int, int, int] = (255, 255, 255)
-    # Padding (px) added around the text bounding box before fitting the
-    # ellipse to it. Larger values produce a roomier oval.
+    # Padding (px) added on every side between the text's pixel bbox
+    # and the rectangle edge. Larger values produce a roomier panel.
     bg_fill_pad: int = 6
+    # Optional border drawn around the backdrop rectangle. Independent
+    # of bg_fill_enabled — you can outline with no fill or vice versa.
+    bg_border_enabled: bool = False
+    bg_border_rgb: tuple[int, int, int] = (0, 0, 0)
+    bg_border_px: int = 2
 
 
 @dataclass
