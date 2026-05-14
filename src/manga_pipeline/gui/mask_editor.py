@@ -31,11 +31,14 @@ from PySide6.QtGui import (
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
 )
@@ -65,14 +68,17 @@ class _MaskCanvas(QLabel):
         self,
         crop_rgb: np.ndarray,
         initial_mask: Optional[np.ndarray] = None,
-        zoom: int = 4,
+        zoom: float = 4.0,
         parent=None,
     ):
         super().__init__(parent)
         h, w = crop_rgb.shape[:2]
         self._w = w
         self._h = h
-        self._zoom = max(1, int(zoom))
+        # Allow fractional zoom (e.g. 0.5) so very large bboxes can be
+        # downscaled to fit the dialog. Painted pixel resolution stays
+        # at the bbox's native res — only display is scaled.
+        self._zoom = max(0.05, float(zoom))
         self._brush_size = max(2, min(w, h) // 16 or 2)
         self._base_pix = _ndarray_to_qpixmap(crop_rgb)
 
@@ -81,7 +87,9 @@ class _MaskCanvas(QLabel):
         else:
             self._mask = np.zeros((h, w), dtype=np.uint8)
 
-        self.setFixedSize(QSize(w * self._zoom, h * self._zoom))
+        self.setFixedSize(
+            QSize(max(1, int(w * self._zoom)), max(1, int(h * self._zoom)))
+        )
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self._last_pos: Optional[tuple[int, int]] = None
@@ -232,14 +240,47 @@ class MaskEditorDialog(QDialog):
         self._reset = False
 
         h, w = crop_rgb.shape[:2]
-        # Pick a zoom that keeps the dialog around 600 px wide max.
-        zoom = max(1, min(8, 600 // max(1, w)))
+
+        # Cap the dialog footprint at a fraction of the available screen
+        # so the user's monitor — not the bbox size — decides the upper
+        # limit. The toolbar / buttons / margins together eat about
+        # 160 px of vertical and 40 px of horizontal chrome, so reserve
+        # those before computing the canvas viewport.
+        screen = self.screen() or QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen is not None else None
+        if avail is not None:
+            max_view_w = int(avail.width() * 0.85) - 40
+            max_view_h = int(avail.height() * 0.80) - 160
+        else:
+            max_view_w, max_view_h = 1200, 720
+        max_view_w = max(320, max_view_w)
+        max_view_h = max(240, max_view_h)
+
+        # Fit the bbox inside (max_view_w, max_view_h). Allow up to 8×
+        # zoom for tiny bboxes and down to 0.1× for very large ones.
+        # Using min(...) on width AND height ensures we never overflow
+        # either dimension at the chosen zoom.
+        fit_zoom = min(max_view_w / max(1, w), max_view_h / max(1, h))
+        zoom = max(0.1, min(8.0, fit_zoom))
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(tr("mask.hint")))
 
         self.canvas = _MaskCanvas(crop_rgb, initial_mask, zoom=zoom)
-        layout.addWidget(self.canvas, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # Wrap the (potentially still-too-big at min-zoom) canvas in a
+        # scroll area so any overflow is scrollable rather than off-screen.
+        self.scroll = QScrollArea()
+        self.scroll.setWidget(self.canvas)
+        self.scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        canvas_size = self.canvas.size()
+        # Reserve a bit of room for scrollbars when needed; never wider
+        # than the screen-derived cap.
+        view_w = min(max_view_w, canvas_size.width() + 24)
+        view_h = min(max_view_h, canvas_size.height() + 24)
+        self.scroll.setMinimumSize(min(view_w, 320), min(view_h, 240))
+        layout.addWidget(self.scroll, 1)
 
         # Brush size row
         size_row = QHBoxLayout()
