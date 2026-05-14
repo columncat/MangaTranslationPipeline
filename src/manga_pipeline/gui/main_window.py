@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
@@ -79,6 +79,10 @@ class MainWindow(QMainWindow):
         # ``_on_queue_item_started`` can jump to the right tab even before
         # the new image has any phase-specific data attached.
         self._queue_target_tab: Optional[int] = None
+        # When the queue scale != 1.0, _queue_load_fn caches each
+        # image's pre-scale source here so _queue_save_fn can restore
+        # it without re-decoding. Keyed by str(path).
+        self._queue_originals: dict[str, Any] = {}
 
         self._build_tabs()
         self._build_explorer()
@@ -650,19 +654,88 @@ class MainWindow(QMainWindow):
         self._thread.start()
 
     def _queue_load_fn(self, path: Path) -> Optional[PageContext]:
+        """Queue worker load hook.
+
+        When the user has set a non-1.0 queue scale factor, the loaded
+        context is downscaled in place before the pipeline sees it.
+        The pre-scale source is cached on ``self._queue_originals`` so
+        save_fn can restore it without re-decoding the file (and so
+        the metadata sidecars never leak the scaled coords to disk).
+        """
         try:
             ctx = persistence.load_context(path)
-            if ctx is not None:
-                return ctx
-            return PageContext(source=load_rgb(path))
+            if ctx is None:
+                ctx = PageContext(source=load_rgb(path))
         except Exception:  # noqa: BLE001
             return None
+        scale = self._current_queue_scale()
+        if scale != 1.0:
+            from ..utils.scaling import downscale_context
+
+            # Cache the original BEFORE we touch ctx.source.
+            self._queue_originals[str(path)] = ctx.source.copy()
+            downscale_context(ctx, scale)
+        return ctx
 
     def _queue_save_fn(self, ctx: PageContext, path: Path) -> None:
+        """Queue worker save hook.
+
+        Mirrors load_fn: if the queue ran at a non-1.0 scale, scale
+        the ctx back to original coords (and re-render text on the
+        upscaled cleaned image so the final PNG keeps sharp text)
+        before persistence writes the metadata + sidecars.
+        """
+        scale = self._current_queue_scale()
+        if scale != 1.0:
+            self._upscale_ctx_for_save(ctx, path, scale)
         try:
             persistence.save_context(ctx, path)
         except Exception:  # noqa: BLE001
             pass
+
+    def _current_queue_scale(self) -> float:
+        s = getattr(self.explorer, "queue_scale", 1.0)
+        return float(s) if s else 1.0
+
+    def _upscale_ctx_for_save(
+        self, ctx: PageContext, path: Path, scale: float
+    ) -> None:
+        """Restore ``ctx`` to the original-image coordinate system.
+
+        - swaps ``ctx.source`` back to the cached original (or re-loads
+          from disk if for some reason it isn't cached)
+        - upscales mask / cleaned / final and bbox coords
+        - re-renders Step 5 text on the upscaled cleaned image so the
+          final PNG keeps sharp text instead of an upscaled (blurry)
+          render
+        """
+        from ..utils.scaling import upscale_context_to_original
+
+        original = self._queue_originals.pop(str(path), None)
+        if original is None:
+            try:
+                original = load_rgb(path)
+            except Exception:  # noqa: BLE001
+                return  # nothing we can do — leave ctx as-is
+        ctx.source = original
+        upscale_context_to_original(ctx, original, inv_scale=1.0 / scale)
+
+        # Re-render Step 5 so text lands at original-resolution sharpness.
+        # Cleaned must be present (otherwise there's nothing to render on).
+        if ctx.cleaned is not None and ctx.translations:
+            try:
+                from ..pipeline.step5_render import KoreanRenderer
+
+                renderer = KoreanRenderer(
+                    font_path=self.config.step5.font_path or None
+                )
+                ctx.final = renderer.render(
+                    ctx.cleaned, ctx.translations, self.config.step5
+                )
+            except Exception:  # noqa: BLE001
+                # Re-render failure isn't fatal; the upscaled final
+                # already sits in ctx.final from upscale_context_to_original.
+                pass
 
     def _on_thread_done(self) -> None:
         self.progress.setVisible(False)
@@ -765,6 +838,10 @@ class MainWindow(QMainWindow):
         # snapshot loaded at queue_item_started time).
         self._queue_active = False
         self._queue_target_tab = None
+        # Drop any cached pre-scale source — every queued item should
+        # have been popped by save_fn already, but cancellation paths
+        # may leave entries behind.
+        self._queue_originals.clear()
         if self._source_path is not None:
             self._load_image_path(self._source_path)
 

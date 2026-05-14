@@ -69,6 +69,10 @@ class ExplorerPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._folder: Optional[Path] = None
+        # Uniform scale factor applied to every image as the queue
+        # worker processes it. Persisted across queue runs so the user
+        # only configures it once per session. 1.0 = no scaling.
+        self._queue_scale: float = 1.0
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
@@ -160,6 +164,18 @@ class ExplorerPanel(QWidget):
         save_all_btn.clicked.connect(self._on_save_all)
         h4.addWidget(save_all_btn, 2)
         ql.addLayout(h4)
+
+        # Scale-factor row: button opens a dialog and a small label
+        # records the chosen factor so it's visible at a glance.
+        h5 = QHBoxLayout()
+        self.scale_btn = QPushButton(tr("explorer.scale_settings"))
+        self.scale_btn.setToolTip(tr("explorer.scale_settings_tip"))
+        self.scale_btn.clicked.connect(self._on_open_scale_dialog)
+        h5.addWidget(self.scale_btn, 1)
+        self.scale_label = QLabel(self._format_scale_label())
+        self.scale_label.setStyleSheet("color: #444; font-size: 11px;")
+        h5.addWidget(self.scale_label)
+        ql.addLayout(h5)
 
         splitter.addWidget(queue_box)
         splitter.setSizes([400, 320])
@@ -312,6 +328,32 @@ class ExplorerPanel(QWidget):
         if not paths:
             return
         self.queue_save_all_requested.emit(paths)
+
+    # ---- queue scale ----
+
+    @property
+    def queue_scale(self) -> float:
+        return self._queue_scale
+
+    def _format_scale_label(self) -> str:
+        if self._queue_scale == 1.0:
+            return tr("explorer.scale_label_off")
+        return tr("explorer.scale_label_on", scale=f"{self._queue_scale:.2f}")
+
+    def _on_open_scale_dialog(self) -> None:
+        from .queue_scale_dialog import QueueScaleDialog
+
+        paths = self._queued_paths()
+        if not paths:
+            # Allow the user to set a scale even with an empty queue —
+            # they may queue images afterwards. Just skip the stats.
+            paths = []
+        dlg = QueueScaleDialog(
+            paths=paths, current_scale=self._queue_scale, parent=self
+        )
+        if dlg.exec():
+            self._queue_scale = float(dlg.scale)
+            self.scale_label.setText(self._format_scale_label())
 
     def _queued_paths(self) -> list[Path]:
         out: list[Path] = []
