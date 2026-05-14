@@ -1067,28 +1067,18 @@ class MainWindow(QMainWindow):
         self._post_history_apply(tr("status.redo", label=entry.label))
 
     def _post_history_apply(self, status_msg: str) -> None:
-        """Common tail for undo/redo/jump: refresh UI, save, re-render.
+        """Common tail for undo / redo / jump: refresh UI + save metadata.
 
-        Re-rendering is conditional on having translations to render —
-        otherwise Step 5 would just error out. The launch is silent and
-        non-blocking so the user immediately sees the bbox-level state
-        change, with the final image catching up shortly after.
+        Step 5 is intentionally NOT re-launched here — scrubbing through
+        history should be cheap, and re-running LaMa inpaint + render on
+        every Ctrl+Z / Ctrl+Y would make rapid history navigation
+        painful. The user can press Render explicitly when they want
+        the final image to catch up to the restored state.
         """
         self._refresh_tabs(self.ctx)
         self._refresh_history_ui()
         self._auto_save_metadata()
         self.status_bar.showMessage(status_msg, 4000)
-        # Re-render so the visible Translate-tab final image matches
-        # the restored translation/bbox state instead of waiting for
-        # the user to press Render manually. Skipped when there's
-        # nothing to render or while the worker is busy.
-        if (
-            self.ctx is not None
-            and self.ctx.translations
-            and not self._queue_active
-            and (self._thread is None or not self._thread.isRunning())
-        ):
-            self._launch_thread(step=5)
 
     def _on_history_jump(self, target_idx: int) -> None:
         """Step through undo / redo until the dock-clicked entry is current.

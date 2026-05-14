@@ -109,22 +109,58 @@ def _render_text_block_to_buffer(
     item. ``bg_fill_rgb`` (when not None) draws an opaque ellipse behind
     the text whose bounding box is the rendered text plus ``bg_fill_pad``
     pixels of padding on each side.
+
+    Sizing strategy: each line's bounding box is measured with the stroke
+    included via ``draw.textbbox(...)`` so that artistic fonts whose
+    ascenders / descenders / left-bearings exceed the nominal font.size
+    don't get clipped on the buffer edges. The buffer is sized to the
+    union of all painted ink, plus a safety margin equal to ¼ of the
+    font size (covers fonts whose embellishments still escape the
+    measured bbox by a pixel or two).
     """
     measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     if not lines:
         lines = [""]
-    line_widths = [_measure(measure, ln or " ", font)[0] for ln in lines]
-    block_w = max(line_widths) if line_widths else 0
-    line_h = font.size
-    block_h = int(line_h * params.line_spacing * (len(lines) - 1)) + line_h
 
     fill = fill_rgb if fill_rgb is not None else params.fill_rgb
     stroke = stroke_rgb if stroke_rgb is not None else params.stroke_rgb
+    stroke_w = max(0, int(params.stroke_px))
+
+    # Per-line bboxes measured WITH the stroke — Pillow textbbox returns
+    # (left, top, right, bottom) where left/top can be non-zero when the
+    # font has bearings that extend past the nominal origin.
+    line_bboxes = [
+        measure.textbbox((0, 0), ln or " ", font=font, stroke_width=stroke_w)
+        for ln in lines
+    ]
+    line_widths = [b[2] - b[0] for b in line_bboxes]
+    line_heights = [b[3] - b[1] for b in line_bboxes]
+    block_w = max(line_widths) if line_widths else 0
+
+    # Distance between successive line origins. ``font.size * line_spacing``
+    # matches the v1.0 layout for the typical case where line height ==
+    # font.size; for fonts where the rendered line is taller than that, we
+    # extend the gap so successive lines don't overlap.
+    nominal_line_h = font.size
+    line_advance = max(
+        int(nominal_line_h * params.line_spacing),
+        max(line_heights) if line_heights else 0,
+    )
+
+    # Total ink height: distance from the top of line 0 to the bottom of
+    # line N-1 (the last line's full bbox extends below its baseline by
+    # `line_heights[-1] - nominal_line_h` for fonts with deep descenders).
+    n = len(lines)
+    if n > 0:
+        block_h = (n - 1) * line_advance + line_heights[-1]
+    else:
+        block_h = 0
 
     # Outer padding around the buffer protects the stroke when the buffer
-    # is later rotated. The ellipse padding is added on top of that so the
-    # ellipse sits outside the text but inside the rotation-safe margin.
-    stroke_pad = max(2, int(params.stroke_px) + 2)
+    # is later rotated, AND adds a safety margin proportional to the font
+    # size for artistic fonts whose ink can still graze the measured bbox.
+    safety_pad = max(2, font.size // 4)
+    stroke_pad = max(safety_pad, stroke_w + 2)
     ellipse_pad = max(0, int(bg_fill_pad)) if bg_fill_rgb is not None else 0
     pad = stroke_pad + ellipse_pad
     buf = Image.new(
@@ -142,26 +178,32 @@ def _render_text_block_to_buffer(
         ey0 = stroke_pad - ellipse_pad
         ex1 = stroke_pad + block_w + ellipse_pad
         ey1 = stroke_pad + block_h + ellipse_pad
-        # Clamp so we don't draw negative-width ellipses on absurd input.
         ex0 = max(0, ex0)
         ey0 = max(0, ey0)
         bdraw.ellipse((ex0, ey0, ex1, ey1), fill=(*bg_fill_rgb, 255))
 
     for i, ln in enumerate(lines):
+        bb = line_bboxes[i]
         line_w = line_widths[i]
         if align == "left":
-            lx = pad
+            base_x = 0
         elif align == "right":
-            lx = pad + (block_w - line_w)
+            base_x = block_w - line_w
         else:  # center (default)
-            lx = pad + (block_w - line_w) // 2
-        ly = pad + int(i * line_h * params.line_spacing)
+            base_x = (block_w - line_w) // 2
+        # ``draw.text`` interprets the position as where the bbox's
+        # (left, top) corner of the painted glyphs should land — but the
+        # bbox we measured starts at (bb[0], bb[1]) when drawn at (0, 0).
+        # Subtract those offsets so the painted ink lands exactly where
+        # we expect (left = pad + base_x, top = pad + i * line_advance).
+        draw_x = pad + base_x - bb[0]
+        draw_y = pad + i * line_advance - bb[1]
         bdraw.text(
-            (lx, ly),
+            (draw_x, draw_y),
             ln,
             font=font,
             fill=fill,
-            stroke_width=params.stroke_px,
+            stroke_width=stroke_w,
             stroke_fill=stroke,
         )
     return buf
